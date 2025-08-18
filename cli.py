@@ -3,6 +3,17 @@ import os
 import shutil
 import webbrowser
 import requests
+import psutil
+import textwrap
+
+def is_running_in_git_bash():
+    try:
+        parent_process = psutil.Process(os.getppid())
+        parent_process_name = parent_process.name()
+        return "winpty-agent.exe" in parent_process_name or "bash.exe" in parent_process_name
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
 
 BASE_URL = "http://localhost:5000"
 
@@ -56,21 +67,57 @@ def cmd_classify(args):
                 return
 
         msg = batch.pop(0)
-        os.system("cls" if os.name == "nt" else "clear")
-        rows, _ = shutil.get_terminal_size((80, 20))
+        
+        os.system("cls" if os.name == "nt" and not is_running_in_git_bash() else "clear")
+        
+        # Get terminal dimensions
+        cols, rows = shutil.get_terminal_size((80, 20))
         max_lines = int(rows * 0.8)
-        lines = [
-            "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email")),
-            "Subject: " + str(msg.get("subject")),
-        ]
-        content_lines = (msg.get("content", "") or "").splitlines()
-        available = max_lines - len(lines)
-        if available > 0:
-            lines.extend(content_lines[:available])
-        print("\n".join(lines))
+        
+        # Prepare header lines with proper wrapping
+        from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
+        subject_line = "Subject: " + str(msg.get("subject"))
+        
+        # Wrap header lines to terminal width
+        wrapped_lines = []
+        wrapped_lines.extend(textwrap.wrap(from_line, width=cols))
+        wrapped_lines.extend(textwrap.wrap(subject_line, width=cols))
+        
+        # Calculate remaining lines for content
+        available_lines = max_lines - len(wrapped_lines)
+        
+        # Process content lines with wrapping
+        content = msg.get("content", "") or ""
+        content_lines = content.splitlines()
+        
+        for content_line in content_lines:
+            if available_lines <= 0:
+                break
+            
+            if not content_line.strip():
+                # Empty line
+                wrapped_lines.append("")
+                available_lines -= 1
+            else:
+                # Wrap the content line
+                wrapped_content = textwrap.wrap(content_line, width=cols)
+                if not wrapped_content:
+                    wrapped_content = [""]
+                
+                # Check if we have enough space for this wrapped content
+                if len(wrapped_content) <= available_lines:
+                    wrapped_lines.extend(wrapped_content)
+                    available_lines -= len(wrapped_content)
+                else:
+                    # Add as many lines as we can fit
+                    wrapped_lines.extend(wrapped_content[:available_lines])
+                    available_lines = 0
+                    break
+        
+        print("\n".join(wrapped_lines))
 
         resp = input("> ").strip()
-        if not resp:
+        if not resp or resp.lower() in {"n", "next", "skip", "s"}:
             continue
         if resp.lower() in {"q", "quit"}:
             print("Quitting.")
