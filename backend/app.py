@@ -9,12 +9,14 @@ from sqlalchemy.orm import Session
 import requests
 
 from config import Config
-from models import Base, Token
+from models import Base, Token, Message, MarketingEmailClassification
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
+
+from gmail_stream import GmailMessageStream
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -261,6 +263,60 @@ def emails_recent():
             })
 
         return jsonify({"count": len(out), "messages": out})
+
+
+@app.get("/emails/stream")
+def emails_stream():
+    n = int(request.args.get("n", 25))
+    page_token = request.args.get("page_token")
+    if n <= 0 or n > 100:
+        return jsonify({"error": "n must be 1..100"}), 400
+
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+        stream = GmailMessageStream(gmail, batch_size=n)
+        stream._next_page_token = page_token  # seed token from client
+        messages, next_token = stream.next_batch()
+        return jsonify({"messages": messages, "next_page_token": next_token})
+
+
+@app.post("/emails/marketing")
+def emails_marketing():
+    data = request.json or {}
+    required = ["id", "subject", "sender_name", "sender_email", "content", "is_marketing"]
+    if not all(k in data for k in required):
+        return jsonify({"error": "missing fields"}), 400
+
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+
+        msg = s.execute(
+            select(Message).where(Message.gmail_id == data["id"])
+        ).scalar_one_or_none()
+        if msg is None:
+            msg = Message(
+                gmail_id=data["id"],
+                subject=data.get("subject"),
+                sender_name=data.get("sender_name"),
+                sender_email=data.get("sender_email"),
+                content=data.get("content"),
+            )
+            s.add(msg)
+            s.flush()
+
+        rec = MarketingEmailClassification(
+            message_id=msg.id,
+            is_marketing=bool(data.get("is_marketing")),
+        )
+        s.add(rec)
+
+        if data.get("is_marketing"):
+            gmail.users().messages().delete(userId="me", id=data["id"]).execute()
+
+        s.commit()
+        return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

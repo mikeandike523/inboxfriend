@@ -1,0 +1,70 @@
+from __future__ import annotations
+from typing import List, Dict, Optional
+import base64
+from email.utils import parseaddr
+
+from googleapiclient.discovery import Resource
+
+
+def _decode_body(payload: dict) -> str:
+    """Recursively extract the first text/plain or text/html part."""
+    if not payload:
+        return ""
+    mime = payload.get("mimeType", "")
+    data = payload.get("body", {}).get("data")
+    if mime in {"text/plain", "text/html"} and data:
+        try:
+            return base64.urlsafe_b64decode(data).decode("utf-8")
+        except Exception:
+            return ""
+    for part in payload.get("parts", []) or []:
+        text = _decode_body(part)
+        if text:
+            return text
+    return ""
+
+
+class GmailMessageStream:
+    """Fetch Gmail messages in batches, newest first."""
+
+    def __init__(self, gmail: Resource, batch_size: int = 25):
+        self.gmail = gmail
+        self.batch_size = batch_size
+        self._next_page_token: Optional[str] = None
+
+    def next_batch(self) -> tuple[List[Dict], Optional[str]]:
+        params: Dict[str, object] = {
+            "userId": "me",
+            "maxResults": self.batch_size,
+        }
+        if self._next_page_token:
+            params["pageToken"] = self._next_page_token
+
+        res = self.gmail.users().messages().list(**params).execute()
+        self._next_page_token = res.get("nextPageToken")
+
+        messages: List[Dict] = []
+        for m in res.get("messages", []):
+            msg = (
+                self.gmail.users()
+                .messages()
+                .get(userId="me", id=m["id"], format="full")
+                .execute()
+            )
+            headers = {
+                h["name"].lower(): h["value"]
+                for h in msg.get("payload", {}).get("headers", [])
+            }
+            from_hdr = headers.get("from", "")
+            name, email = parseaddr(from_hdr)
+            messages.append(
+                {
+                    "id": msg.get("id"),
+                    "subject": headers.get("subject"),
+                    "sender_name": name or None,
+                    "sender_email": email or None,
+                    "snippet": msg.get("snippet"),
+                    "content": _decode_body(msg.get("payload", {})),
+                }
+            )
+        return messages, self._next_page_token
