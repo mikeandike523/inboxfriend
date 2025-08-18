@@ -1,0 +1,10 @@
+Flask==3.0.2
+SQLAlchemy==2.0.31
+PyMySQL==1.1.0
+python-dotenv==1.0.1
+requests==2.32.3
+
+# Google auth/client libs
+google-auth==2.31.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.137.0

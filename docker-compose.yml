@@ -1,0 +1,47 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: inbox_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-inboxapp}
+      MYSQL_USER: ${MYSQL_USER:-inbox}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-inboxpass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    command: ["mysqld", "--default-authentication-plugin=mysql_native_password"]
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: inbox_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_USER: ${MYSQL_USER:-inbox}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-inboxpass}
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+
+  backend:
+    build:
+      context: ./backend
+    container_name: inbox_backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DB_URL: ${DB_URL:-mysql+pymysql://${MYSQL_USER:-inbox}:${MYSQL_PASSWORD:-inboxpass}@mysql:3307/${MYSQL_DATABASE:-inboxapp}}
+      FLASK_RUN_HOST: 0.0.0.0
+      FLASK_RUN_PORT: 5000
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mysql
+
+volumes:
+  db_data:

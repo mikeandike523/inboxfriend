@@ -1,0 +1,3 @@
+wordfreq
+requests
+nltk
