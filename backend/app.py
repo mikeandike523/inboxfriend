@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -9,7 +8,7 @@ from sqlalchemy.orm import Session
 import requests
 
 from config import Config
-from models import Base, Token, Message, MarketingEmailClassification
+from models import Base, Token, Message, Classification
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -269,6 +268,7 @@ def emails_recent():
 def emails_stream():
     n = int(request.args.get("n", 25))
     page_token = request.args.get("page_token")
+    skip_classified = request.args.get("skip_classified", "false").lower() == "true"
     if n <= 0 or n > 100:
         return jsonify({"error": "n must be 1..100"}), 400
 
@@ -277,14 +277,32 @@ def emails_stream():
         gmail = build("gmail", "v1", credentials=creds)
         stream = GmailMessageStream(gmail, batch_size=n)
         stream._next_page_token = page_token  # seed token from client
-        messages, next_token = stream.next_batch()
+
+        messages = []
+        next_token = None
+        while True:
+            batch, next_token = stream.next_batch()
+            if skip_classified and batch:
+                ids = [m["id"] for m in batch]
+                classified_ids = set(
+                    s.execute(
+                        select(Message.gmail_id)
+                        .join(Classification)
+                        .where(Message.gmail_id.in_(ids))
+                    ).scalars()
+                )
+                batch = [m for m in batch if m["id"] not in classified_ids]
+            if batch or not next_token:
+                messages = batch
+                break
+
         return jsonify({"messages": messages, "next_page_token": next_token})
 
 
-@app.post("/emails/marketing")
-def emails_marketing():
+@app.post("/emails/classify")
+def emails_classify():
     data = request.json or {}
-    required = ["id", "subject", "sender_name", "sender_email", "content", "is_marketing"]
+    required = ["id", "subject", "sender_name", "sender_email", "content", "category"]
     if not all(k in data for k in required):
         return jsonify({"error": "missing fields"}), 400
 
@@ -295,61 +313,32 @@ def emails_marketing():
         msg = s.execute(
             select(Message).where(Message.gmail_id == data["id"])
         ).scalar_one_or_none()
-        
-        if msg is None:
-            # Try to store the message with retry logic for content size
-            content = data.get("content", "")
-            max_retries = 10  # Prevent infinite loop
-            retry_count = 0
-            
-            while retry_count < max_retries:
-                try:
-                    msg = Message(
-                        gmail_id=data["id"],
-                        subject=data.get("subject"),
-                        sender_name=data.get("sender_name"),
-                        sender_email=data.get("sender_email"),
-                        content=content,
-                    )
-                    s.add(msg)
-                    s.flush()  # This will trigger the database constraint check
-                    break  # Success, exit the retry loop
-                    
-                except Exception as e:
-                    # Check if it's a data too long error (MySQL error code 1406)
-                    error_msg = str(e).lower()
-                    if "data too long" in error_msg or "string or binary data would be truncated" in error_msg:
-                        s.rollback()  # Rollback the failed transaction
-                        retry_count += 1
-                        content = content[:len(content)//2]  # Cut content in half
-                        print(f"Content too large, retry {retry_count}: cutting to {len(content)} characters")
-                        
-                        if len(content) == 0:
-                            # Content is empty, store with empty string
-                            content = ""
-                            break
-                    else:
-                        # Different error, re-raise
-                        raise e
-            
-            if retry_count >= max_retries:
-                return jsonify({"error": "Could not store message: content too large even after truncation"}), 500
 
-        # Check if this message is already classified
+        if msg is None:
+            msg = Message(
+                gmail_id=data["id"],
+                subject=data.get("subject"),
+                sender_name=data.get("sender_name"),
+                sender_email=data.get("sender_email"),
+                content=(data.get("content", "")[:1024]),
+            )
+            s.add(msg)
+            s.flush()
+
         existing_classification = s.execute(
-            select(MarketingEmailClassification).where(MarketingEmailClassification.message_id == msg.id)
+            select(Classification).where(Classification.message_id == msg.id)
         ).scalar_one_or_none()
-        
+
         if existing_classification:
             return jsonify({"ok": True, "message": "Email already classified", "skipped": True})
 
-        rec = MarketingEmailClassification(
+        rec = Classification(
             message_id=msg.id,
-            is_marketing=bool(data.get("is_marketing")),
+            category=data.get("category")[:128],
         )
         s.add(rec)
 
-        if data.get("is_marketing"):
+        if data.get("delete"):
             gmail.users().messages().delete(userId="me", id=data["id"]).execute()
 
         s.commit()

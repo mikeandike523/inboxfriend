@@ -1,6 +1,6 @@
 import argparse
-import sys
-import time
+import os
+import shutil
 import webbrowser
 import requests
 
@@ -43,7 +43,7 @@ def cmd_classify(args):
     batch = []
     while True:
         if not batch:
-            params = {"n": args.n}
+            params = {"n": args.n, "skip_classified": "true"}
             if page_token:
                 params["page_token"] = page_token
             r = requests.get(f"{BASE_URL}/emails/stream", params=params)
@@ -56,23 +56,46 @@ def cmd_classify(args):
                 return
 
         msg = batch.pop(0)
-        print("\nFrom: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email")))
-        print("Subject:", msg.get("subject"))
-        print(msg.get("content", "")[:500])
-        choice = input("1.marketing 2.not 3.skip 4.quit > ")
-        if choice in {"1", "2"}:
-            msg["is_marketing"] = choice == "1"
-            requests.post(f"{BASE_URL}/emails/marketing", json=msg).raise_for_status()
-            if choice == "1":
-                print("Marked as marketing and deleted.")
-            else:
-                print("Marked as not marketing.")
-        elif choice == "4":
+        os.system("cls" if os.name == "nt" else "clear")
+        rows, _ = shutil.get_terminal_size((80, 20))
+        max_lines = int(rows * 0.8)
+        lines = [
+            "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email")),
+            "Subject: " + str(msg.get("subject")),
+        ]
+        content_lines = (msg.get("content", "") or "").splitlines()
+        available = max_lines - len(lines)
+        if available > 0:
+            lines.extend(content_lines[:available])
+        print("\n".join(lines))
+
+        resp = input("> ").strip()
+        if not resp:
+            continue
+        if resp.lower() in {"q", "quit"}:
             print("Quitting.")
             return
+        delete = False
+        if resp.endswith(" DELETE"):
+            delete = True
+            resp = resp[:-7].strip()
+        category = resp
+        if not category:
+            continue
+        payload = {
+            "id": msg["id"],
+            "subject": msg.get("subject"),
+            "sender_name": msg.get("sender_name"),
+            "sender_email": msg.get("sender_email"),
+            "content": msg.get("content"),
+            "category": category,
+            "delete": delete,
+        }
+        requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
+        if delete:
+            print(f"Categorized as {category} and deleted.")
         else:
-            # skip just move on
-            pass
+            print(f"Categorized as {category}.")
 
 
 def main():
@@ -92,7 +115,7 @@ def main():
     sub_recent.add_argument("-n", type=int, default=20)
     sub_recent.set_defaults(func=cmd_recent_emails)
 
-    sub_classify = sub.add_parser("classify", help="Interactive marketing classifier")
+    sub_classify = sub.add_parser("classify", help="Interactive email classifier")
     sub_classify.add_argument("-n", type=int, default=25)
     sub_classify.set_defaults(func=cmd_classify)
 

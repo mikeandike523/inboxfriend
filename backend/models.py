@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Text, Integer, Boolean, ForeignKey
+from sqlalchemy import String, DateTime, Text, Integer, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
@@ -31,20 +31,20 @@ class Message(Base):
     subject: Mapped[str | None] = mapped_column(Text)
     sender_name: Mapped[str | None] = mapped_column(String(320))
     sender_email: Mapped[str | None] = mapped_column(String(320))
-    content: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str | None] = mapped_column(String(1024))
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
 
-class MarketingEmailClassification(Base):
-    __tablename__ = "marketing_email_classification"
+class Classification(Base):
+    __tablename__ = "message_classification"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_id: Mapped[int] = mapped_column(
         ForeignKey("cached_messages.id"), unique=True, nullable=False
     )
-    is_marketing: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    category: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
