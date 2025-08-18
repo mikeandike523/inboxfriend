@@ -154,6 +154,107 @@ def cmd_classify(args):
             print(f"Categorized as {category}.")
 
 
+def cmd_classify_preview(args):
+    page_token = None
+    batch = []
+    while True:
+        if not batch:
+            print("Loading more emails...")
+            params = {"n": args.n, "skip_classified": "true"}
+            if page_token:
+                params["page_token"] = page_token
+            r = requests.get(f"{BASE_URL}/emails/stream-preview", params=params)
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("messages", [])
+            page_token = data.get("next_page_token")
+            if not batch:
+                print("No more messages.")
+                return
+
+        msg = batch.pop(0)
+
+        os.system("cls" if os.name == "nt" and not is_running_in_git_bash() else "clear")
+
+        # Get terminal dimensions
+        cols, rows = shutil.get_terminal_size((80, 20))
+        max_lines = int(rows * 0.8)
+
+        # Prepare header lines with proper wrapping
+        from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
+        subject_line = "Subject: " + str(msg.get("subject"))
+        date_line = "Date: " + str(msg.get("date"))
+        thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
+
+        # Wrap header lines to terminal width
+        wrapped_lines = []
+        wrapped_lines.extend(textwrap.wrap(date_line, width=cols))
+        wrapped_lines.extend(textwrap.wrap(from_line, width=cols))
+        wrapped_lines.extend(textwrap.wrap(subject_line, width=cols))
+        wrapped_lines.extend(textwrap.wrap(thread_line, width=cols))
+
+        # Calculate remaining lines for content
+        available_lines = max_lines - len(wrapped_lines)
+
+        # Process content lines with wrapping
+        content = msg.get("content", "") or ""
+        content_lines = content.splitlines()
+
+        for content_line in content_lines:
+            if available_lines <= 0:
+                break
+
+            if not content_line.strip():
+                wrapped_lines.append("")
+                available_lines -= 1
+            else:
+                wrapped_content = textwrap.wrap(content_line, width=cols)
+                if not wrapped_content:
+                    wrapped_content = [""]
+
+                if len(wrapped_content) <= available_lines:
+                    wrapped_lines.extend(wrapped_content)
+                    available_lines -= len(wrapped_content)
+                else:
+                    wrapped_lines.extend(wrapped_content[:available_lines])
+                    available_lines = 0
+                    break
+
+        print("\n".join(wrapped_lines))
+
+        resp = input("> ").strip()
+        if not resp or resp.lower() in {"n", "next", "skip", "s"}:
+            continue
+        if resp.lower() in {"q", "quit"}:
+            print("Quitting.")
+            return
+        if resp.lower() == "delete":
+            requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
+            print("Deleted.")
+            continue
+        delete = False
+        if resp.endswith(" DELETE"):
+            delete = True
+            resp = resp[:-7].strip()
+        category = resp
+        if not category:
+            continue
+        payload = {
+            "id": msg["id"],
+            "subject": msg.get("subject"),
+            "sender_name": msg.get("sender_name"),
+            "sender_email": msg.get("sender_email"),
+            "content": msg.get("content"),
+            "category": category,
+            "delete": delete,
+        }
+        requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
+        if delete:
+            print(f"Categorized as {category} and deleted.")
+        else:
+            print(f"Categorized as {category}.")
+
+
 def main():
     p = argparse.ArgumentParser(description="Inbox Tool CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -174,6 +275,12 @@ def main():
     sub_classify = sub.add_parser("classify", help="Interactive email classifier")
     sub_classify.add_argument("-n", type=int, default=25)
     sub_classify.set_defaults(func=cmd_classify)
+
+    sub_classify_preview = sub.add_parser(
+        "classify-preview", help="Interactive classifier using Gmail previews"
+    )
+    sub_classify_preview.add_argument("-n", type=int, default=25)
+    sub_classify_preview.set_defaults(func=cmd_classify_preview)
 
     args = p.parse_args()
     if not hasattr(args, "func"):

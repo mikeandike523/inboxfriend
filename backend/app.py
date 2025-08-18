@@ -15,7 +15,7 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 
-from gmail_stream import GmailMessageStream
+from gmail_stream import GmailMessageStream, GmailPreviewMessageStream
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -281,6 +281,41 @@ def emails_stream():
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
         stream = GmailMessageStream(gmail, batch_size=n)
+        stream._next_page_token = page_token  # seed token from client
+
+        messages = []
+        next_token = None
+        while True:
+            batch, next_token = stream.next_batch()
+            if skip_classified and batch:
+                ids = [m["id"] for m in batch]
+                classified_ids = set(
+                    s.execute(
+                        select(Message.gmail_id)
+                        .join(Classification)
+                        .where(Message.gmail_id.in_(ids))
+                    ).scalars()
+                )
+                batch = [m for m in batch if m["id"] not in classified_ids]
+            if batch or not next_token:
+                messages = batch
+                break
+
+        return jsonify({"messages": messages, "next_page_token": next_token})
+
+
+@app.get("/emails/stream-preview")
+def emails_stream_preview():
+    n = int(request.args.get("n", 25))
+    page_token = request.args.get("page_token")
+    skip_classified = request.args.get("skip_classified", "false").lower() == "true"
+    if n <= 0 or n > 100:
+        return jsonify({"error": "n must be 1..100"}), 400
+
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+        stream = GmailPreviewMessageStream(gmail, batch_size=n)
         stream._next_page_token = page_token  # seed token from client
 
         messages = []
