@@ -295,16 +295,53 @@ def emails_marketing():
         msg = s.execute(
             select(Message).where(Message.gmail_id == data["id"])
         ).scalar_one_or_none()
+        
         if msg is None:
-            msg = Message(
-                gmail_id=data["id"],
-                subject=data.get("subject"),
-                sender_name=data.get("sender_name"),
-                sender_email=data.get("sender_email"),
-                content=data.get("content"),
-            )
-            s.add(msg)
-            s.flush()
+            # Try to store the message with retry logic for content size
+            content = data.get("content", "")
+            max_retries = 10  # Prevent infinite loop
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    msg = Message(
+                        gmail_id=data["id"],
+                        subject=data.get("subject"),
+                        sender_name=data.get("sender_name"),
+                        sender_email=data.get("sender_email"),
+                        content=content,
+                    )
+                    s.add(msg)
+                    s.flush()  # This will trigger the database constraint check
+                    break  # Success, exit the retry loop
+                    
+                except Exception as e:
+                    # Check if it's a data too long error (MySQL error code 1406)
+                    error_msg = str(e).lower()
+                    if "data too long" in error_msg or "string or binary data would be truncated" in error_msg:
+                        s.rollback()  # Rollback the failed transaction
+                        retry_count += 1
+                        content = content[:len(content)//2]  # Cut content in half
+                        print(f"Content too large, retry {retry_count}: cutting to {len(content)} characters")
+                        
+                        if len(content) == 0:
+                            # Content is empty, store with empty string
+                            content = ""
+                            break
+                    else:
+                        # Different error, re-raise
+                        raise e
+            
+            if retry_count >= max_retries:
+                return jsonify({"error": "Could not store message: content too large even after truncation"}), 500
+
+        # Check if this message is already classified
+        existing_classification = s.execute(
+            select(MarketingEmailClassification).where(MarketingEmailClassification.message_id == msg.id)
+        ).scalar_one_or_none()
+        
+        if existing_classification:
+            return jsonify({"ok": True, "message": "Email already classified", "skipped": True})
 
         rec = MarketingEmailClassification(
             message_id=msg.id,
