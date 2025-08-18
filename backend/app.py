@@ -274,6 +274,7 @@ def emails_stream():
     n = int(request.args.get("n", 25))
     page_token = request.args.get("page_token")
     skip_classified = request.args.get("skip_classified", "false").lower() == "true"
+    use_before = request.args.get("use_before", "true").lower() == "true"
     if n <= 0 or n > 100:
         return jsonify({"error": "n must be 1..100"}), 400
 
@@ -282,7 +283,7 @@ def emails_stream():
         gmail = build("gmail", "v1", credentials=creds)
 
         before: str | None = None
-        if skip_classified:
+        if skip_classified and use_before:
             last_id = s.execute(
                 select(Message.gmail_id)
                 .join(Classification)
@@ -333,6 +334,7 @@ def emails_stream_preview():
     n = int(request.args.get("n", 25))
     page_token = request.args.get("page_token")
     skip_classified = request.args.get("skip_classified", "false").lower() == "true"
+    use_before = request.args.get("use_before", "true").lower() == "true"
     if n <= 0 or n > 100:
         return jsonify({"error": "n must be 1..100"}), 400
 
@@ -341,7 +343,7 @@ def emails_stream_preview():
         gmail = build("gmail", "v1", credentials=creds)
 
         before: str | None = None
-        if skip_classified:
+        if skip_classified and use_before:
             last_id = s.execute(
                 select(Message.gmail_id)
                 .join(Classification)

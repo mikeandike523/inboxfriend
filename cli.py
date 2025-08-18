@@ -284,44 +284,55 @@ def cmd_classify_auto(args):
 
     page_token = None
     batch = []
-    while True:
-        if not batch:
-            print("Loading more emails...")
-            params = {"n": args.n, "skip_classified": "true"}
-            if page_token:
-                params["page_token"] = page_token
-            r = requests.get(f"{BASE_URL}/emails/stream-preview", params=params)
-            r.raise_for_status()
-            data = r.json()
-            batch = data.get("messages", [])
-            page_token = data.get("next_page_token")
+    try:
+        while True:
             if not batch:
-                print("No more messages.")
-                return
-
-        msg = batch.pop(0)
-        matched = False
-        for rule in compiled_rules:
-            patterns = rule["patterns"]
-            if all(patterns[field].search(msg.get(field, "") or "") for field in patterns):
-                payload = {
-                    "id": msg["id"],
-                    "subject": msg.get("subject"),
-                    "sender_name": msg.get("sender_name"),
-                    "sender_email": msg.get("sender_email"),
-                    "content": msg.get("content"),
-                    "category": rule["category"],
-                    "delete": rule["delete"],
+                print("Loading more emails...")
+                params = {
+                    "n": args.n,
+                    "skip_classified": "true",
+                    "use_before": "true" if args.use_before_date else "false",
                 }
-                requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
-                if rule["delete"]:
-                    print(f"Categorized as {rule['category']} and deleted: {msg.get('subject')}")
-                else:
-                    print(f"Categorized as {rule['category']}: {msg.get('subject')}")
-                matched = True
-                break
-        if not matched:
-            print(f"No rule matched: {msg.get('subject')}")
+                if page_token:
+                    params["page_token"] = page_token
+                r = requests.get(f"{BASE_URL}/emails/stream-preview", params=params)
+                r.raise_for_status()
+                data = r.json()
+                batch = data.get("messages", [])
+                page_token = data.get("next_page_token")
+                if not batch:
+                    print("No more messages.")
+                    return
+
+            msg = batch.pop(0)
+            matched = False
+            for rule in compiled_rules:
+                patterns = rule["patterns"]
+                if all(patterns[field].search(msg.get(field, "") or "") for field in patterns):
+                    payload = {
+                        "id": msg["id"],
+                        "subject": msg.get("subject"),
+                        "sender_name": msg.get("sender_name"),
+                        "sender_email": msg.get("sender_email"),
+                        "content": msg.get("content"),
+                        "category": rule["category"],
+                        "delete": rule["delete"],
+                    }
+                    requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
+                    if rule["delete"]:
+                        print(
+                            f"Categorized as {rule['category']} and deleted: {msg.get('subject')}"
+                        )
+                    else:
+                        print(
+                            f"Categorized as {rule['category']}: {msg.get('subject')}"
+                        )
+                    matched = True
+                    break
+            if not matched:
+                print(f"No rule matched: {msg.get('subject')}")
+    except KeyboardInterrupt:
+        print("Stopping automatic classification.")
 
 
 def main():
@@ -356,6 +367,11 @@ def main():
     )
     sub_classify_auto.add_argument("rules", help="Path to rules JSON file")
     sub_classify_auto.add_argument("-n", type=int, default=25)
+    sub_classify_auto.add_argument(
+        "--use-before-date",
+        action="store_true",
+        help="Enable before-date optimization when skipping classified emails",
+    )
     sub_classify_auto.set_defaults(func=cmd_classify_auto)
 
     args = p.parse_args()
