@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+import re
 import shutil
 import webbrowser
 import requests
@@ -255,6 +257,73 @@ def cmd_classify_preview(args):
             print(f"Categorized as {category}.")
 
 
+def cmd_classify_auto(args):
+    with open(args.rules) as f:
+        rule_data = json.load(f)
+
+    compiled_rules = []
+    for rule in rule_data:
+        patterns = {}
+        if rule.get("sender_name"):
+            patterns["sender_name"] = re.compile(rule["sender_name"], re.IGNORECASE)
+        if rule.get("sender_email"):
+            patterns["sender_email"] = re.compile(rule["sender_email"], re.IGNORECASE)
+        if rule.get("subject"):
+            patterns["subject"] = re.compile(rule["subject"], re.IGNORECASE)
+        if rule.get("preview"):
+            patterns["content"] = re.compile(rule["preview"], re.IGNORECASE)
+        if not patterns:
+            continue
+        compiled_rules.append(
+            {
+                "patterns": patterns,
+                "category": rule.get("category"),
+                "delete": bool(rule.get("delete")),
+            }
+        )
+
+    page_token = None
+    batch = []
+    while True:
+        if not batch:
+            print("Loading more emails...")
+            params = {"n": args.n, "skip_classified": "true"}
+            if page_token:
+                params["page_token"] = page_token
+            r = requests.get(f"{BASE_URL}/emails/stream-preview", params=params)
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("messages", [])
+            page_token = data.get("next_page_token")
+            if not batch:
+                print("No more messages.")
+                return
+
+        msg = batch.pop(0)
+        matched = False
+        for rule in compiled_rules:
+            patterns = rule["patterns"]
+            if all(patterns[field].search(msg.get(field, "") or "") for field in patterns):
+                payload = {
+                    "id": msg["id"],
+                    "subject": msg.get("subject"),
+                    "sender_name": msg.get("sender_name"),
+                    "sender_email": msg.get("sender_email"),
+                    "content": msg.get("content"),
+                    "category": rule["category"],
+                    "delete": rule["delete"],
+                }
+                requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
+                if rule["delete"]:
+                    print(f"Categorized as {rule['category']} and deleted: {msg.get('subject')}")
+                else:
+                    print(f"Categorized as {rule['category']}: {msg.get('subject')}")
+                matched = True
+                break
+        if not matched:
+            print(f"No rule matched: {msg.get('subject')}")
+
+
 def main():
     p = argparse.ArgumentParser(description="Inbox Tool CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -281,6 +350,13 @@ def main():
     )
     sub_classify_preview.add_argument("-n", type=int, default=25)
     sub_classify_preview.set_defaults(func=cmd_classify_preview)
+
+    sub_classify_auto = sub.add_parser(
+        "classify-auto", help="Automatically classify emails using regex rules"
+    )
+    sub_classify_auto.add_argument("rules", help="Path to rules JSON file")
+    sub_classify_auto.add_argument("-n", type=int, default=25)
+    sub_classify_auto.set_defaults(func=cmd_classify_auto)
 
     args = p.parse_args()
     if not hasattr(args, "func"):
