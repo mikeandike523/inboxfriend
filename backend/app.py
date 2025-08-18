@@ -240,8 +240,13 @@ def emails_recent():
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
 
-        # List messages
-        lst = gmail.users().messages().list(userId="me", maxResults=n).execute()
+        # List messages only from the inbox
+        lst = (
+            gmail.users()
+            .messages()
+            .list(userId="me", maxResults=n, labelIds=["INBOX"])
+            .execute()
+        )
         messages = lst.get("messages", [])
 
         out = []

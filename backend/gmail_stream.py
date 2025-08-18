@@ -27,15 +27,22 @@ def _decode_body(payload: dict) -> str:
 class GmailMessageStream:
     """Fetch Gmail messages in batches, newest first."""
 
-    def __init__(self, gmail: Resource, batch_size: int = 25):
+    def __init__(
+        self,
+        gmail: Resource,
+        batch_size: int = 25,
+        label_ids: Optional[List[str]] = None,
+    ):
         self.gmail = gmail
         self.batch_size = batch_size
+        self.label_ids = label_ids or ["INBOX"]
         self._next_page_token: Optional[str] = None
 
     def next_batch(self) -> tuple[List[Dict], Optional[str]]:
         params: Dict[str, object] = {
             "userId": "me",
             "maxResults": self.batch_size,
+            "labelIds": self.label_ids,
         }
         if self._next_page_token:
             params["pageToken"] = self._next_page_token
