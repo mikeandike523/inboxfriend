@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
 from flask import Flask, request, jsonify, redirect, make_response
@@ -280,7 +280,31 @@ def emails_stream():
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
-        stream = GmailMessageStream(gmail, batch_size=n)
+
+        before: str | None = None
+        if skip_classified:
+            last_id = s.execute(
+                select(Message.gmail_id)
+                .join(Classification)
+                .order_by(Classification.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if last_id:
+                try:
+                    msg = (
+                        gmail.users()
+                        .messages()
+                        .get(userId="me", id=last_id, format="metadata")
+                        .execute()
+                    )
+                    internal = msg.get("internalDate")
+                    if internal:
+                        dt = datetime.fromtimestamp(int(internal) / 1000, tz=timezone.utc)
+                        before = (dt + timedelta(days=1)).strftime("%Y/%m/%d")
+                except Exception:
+                    before = None
+
+        stream = GmailMessageStream(gmail, batch_size=n, before=before)
         stream._next_page_token = page_token  # seed token from client
 
         messages = []
@@ -315,7 +339,31 @@ def emails_stream_preview():
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
-        stream = GmailPreviewMessageStream(gmail, batch_size=n)
+
+        before: str | None = None
+        if skip_classified:
+            last_id = s.execute(
+                select(Message.gmail_id)
+                .join(Classification)
+                .order_by(Classification.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if last_id:
+                try:
+                    msg = (
+                        gmail.users()
+                        .messages()
+                        .get(userId="me", id=last_id, format="metadata")
+                        .execute()
+                    )
+                    internal = msg.get("internalDate")
+                    if internal:
+                        dt = datetime.fromtimestamp(int(internal) / 1000, tz=timezone.utc)
+                        before = (dt + timedelta(days=1)).strftime("%Y/%m/%d")
+                except Exception:
+                    before = None
+
+        stream = GmailPreviewMessageStream(gmail, batch_size=n, before=before)
         stream._next_page_token = page_token  # seed token from client
 
         messages = []

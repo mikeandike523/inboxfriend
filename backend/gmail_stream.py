@@ -32,11 +32,13 @@ class GmailMessageStream:
         gmail: Resource,
         batch_size: int = 25,
         label_ids: Optional[List[str]] = None,
+        before: Optional[str] = None,
     ):
         self.gmail = gmail
         self.batch_size = batch_size
         self.label_ids = label_ids or ["INBOX"]
         self._next_page_token: Optional[str] = None
+        self.before = before
 
     def next_batch(self) -> tuple[List[Dict], Optional[str]]:
         params: Dict[str, object] = {
@@ -46,6 +48,8 @@ class GmailMessageStream:
         }
         if self._next_page_token:
             params["pageToken"] = self._next_page_token
+        if self.before:
+            params["q"] = f"before:{self.before}"
 
         res = self.gmail.users().messages().list(**params).execute()
         self._next_page_token = res.get("nextPageToken")
@@ -98,11 +102,13 @@ class GmailPreviewMessageStream:
         gmail: Resource,
         batch_size: int = 25,
         label_ids: Optional[List[str]] = None,
+        before: Optional[str] = None,
     ):
         self.gmail = gmail
         self.batch_size = batch_size
         self.label_ids = label_ids or ["INBOX"]
         self._next_page_token: Optional[str] = None
+        self.before = before
 
     def next_batch(self) -> tuple[List[Dict], Optional[str]]:
         params: Dict[str, object] = {
@@ -112,6 +118,8 @@ class GmailPreviewMessageStream:
         }
         if self._next_page_token:
             params["pageToken"] = self._next_page_token
+        if self.before:
+            params["q"] = f"before:{self.before}"
 
         res = self.gmail.users().messages().list(**params).execute()
         self._next_page_token = res.get("nextPageToken")
