@@ -54,6 +54,7 @@ def cmd_classify(args):
     batch = []
     while True:
         if not batch:
+            print("Loading more emails...")
             params = {"n": args.n, "skip_classified": "true"}
             if page_token:
                 params["page_token"] = page_token
@@ -77,11 +78,15 @@ def cmd_classify(args):
         # Prepare header lines with proper wrapping
         from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
         subject_line = "Subject: " + str(msg.get("subject"))
+        date_line = "Date: " + str(msg.get("date"))
+        thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
         
         # Wrap header lines to terminal width
         wrapped_lines = []
+        wrapped_lines.extend(textwrap.wrap(date_line, width=cols))
         wrapped_lines.extend(textwrap.wrap(from_line, width=cols))
         wrapped_lines.extend(textwrap.wrap(subject_line, width=cols))
+        wrapped_lines.extend(textwrap.wrap(thread_line, width=cols))
         
         # Calculate remaining lines for content
         available_lines = max_lines - len(wrapped_lines)
@@ -122,6 +127,10 @@ def cmd_classify(args):
         if resp.lower() in {"q", "quit"}:
             print("Quitting.")
             return
+        if resp.lower() == "delete":
+            requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
+            print("Deleted.")
+            continue
         delete = False
         if resp.endswith(" DELETE"):
             delete = True

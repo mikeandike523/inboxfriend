@@ -64,12 +64,25 @@ class GmailMessageStream:
             }
             from_hdr = headers.get("from", "")
             name, email = parseaddr(from_hdr)
+
+            # Determine if this message is part of a thread with multiple messages
+            thread_id = msg.get("threadId")
+            thread = (
+                self.gmail.users()
+                .threads()
+                .get(userId="me", id=thread_id, fields="messages/id")
+                .execute()
+            )
+            in_thread = len(thread.get("messages", [])) > 1
+
             messages.append(
                 {
                     "id": msg.get("id"),
                     "subject": headers.get("subject"),
                     "sender_name": name or None,
                     "sender_email": email or None,
+                    "date": headers.get("date"),
+                    "thread": in_thread,
                     "snippet": msg.get("snippet"),
                     "content": _decode_body(msg.get("payload", {})),
                 }

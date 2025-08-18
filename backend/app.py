@@ -350,5 +350,18 @@ def emails_classify():
         return jsonify({"ok": True})
 
 
+@app.post("/emails/delete")
+def emails_delete():
+    data = request.json or {}
+    if "id" not in data:
+        return jsonify({"error": "missing fields"}), 400
+
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+        gmail.users().messages().delete(userId="me", id=data["id"]).execute()
+        return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
