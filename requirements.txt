@@ -1,9 +1,26 @@
+# requirements.txt
+# Look for PyTorch CUDA wheels here, fall back to PyPI for everything else
+--index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://pypi.org/simple
+
 wordfreq
 requests
 nltk
 psutil
 scikit-learn
 sqlalchemy
-dotenv
+python-dotenv
 pymysql
 tqdm
+datasets
+accelerate
+transformers
+sentence-transformers
+setfit
+lightning
+huggingface_hub
+
+# PyTorch stack (no +cu*** in the pin)
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0

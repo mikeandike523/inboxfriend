@@ -3,3 +3,4 @@
 db_data
 personal-rules
 backend/classifier.joblib
+backend/setfit_marketing_newsletter_other
