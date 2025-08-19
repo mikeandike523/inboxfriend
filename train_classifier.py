@@ -12,15 +12,17 @@ from sklearn.linear_model import LogisticRegression
 from joblib import dump
 from tqdm import tqdm
 
+# Target categories - anything not in this list will be classified as "other"
+TARGET_CATEGORIES = ["MARKETING", "NEWSLETTER"]
+
 def load_data(engine):
-    """Load labeled messages and build (text, domain) tuples."""
+    """Load labeled messages and build text features only."""
     print("Loading training data from database...")
     with Session(engine) as s:
         rows = s.execute(
             select(
                 Message.subject,
                 Message.content,
-                Message.sender_email,
                 Classification.category,
             ).join(Classification, Classification.message_id == Message.id)
         ).all()
@@ -28,51 +30,64 @@ def load_data(engine):
     print(f"Found {len(rows)} labeled messages")
     
     X, y = [], []
-    for subject, content, sender_email, category in tqdm(rows, desc="Processing messages"):
+    for subject, content, category in tqdm(rows, desc="Processing messages"):
         text = f"{subject or ''} {content or ''}".strip()
-        domain = (
-            sender_email.split("@")[-1].lower().strip()
-            if sender_email and "@" in sender_email
-            else ""
-        )
-        X.append((text, domain))
-        y.append(category)
+        X.append(text)
+        
+        # Map categories to our target set or "OTHER"
+        if category.upper() in TARGET_CATEGORIES:
+            y.append(category.upper())
+        else:
+            y.append("OTHER")
 
     if not y:
         raise ValueError("No training rows found. Ensure the DB has labeled data.")
 
     print(f"Prepared {len(X)} training samples")
+    print(
+        f"""
+Category distribution:
+{dict(zip(*zip(*[(cat, y.count(cat)) for cat in set(y)])))}
+""".strip()
+        )
     return X, y
 
 def build_pipeline():
-    """Create the preprocessing + classifier pipeline."""
+    """Create the preprocessing + classifier pipeline focused on text content."""
     print("Building ML pipeline...")
     
-    text_union = FeatureUnion(
+    # Enhanced text feature extraction for better keyword and phrase detection
+    text_features = FeatureUnion(
         [
-            ("word", TfidfVectorizer(ngram_range=(1, 2), min_df=2)),
-            ("char", TfidfVectorizer(analyzer="char", ngram_range=(3, 5), min_df=2)),
-        ]
-    )
-
-    preprocessor = ColumnTransformer(
-        [
-            ("text", text_union, 0),
-            ("domain", OneHotEncoder(handle_unknown="ignore"), [1]),
+            # Word-level features (1-3 grams for better phrase capture)
+            ("word", TfidfVectorizer(
+                ngram_range=(1, 3), 
+                min_df=2, 
+                max_df=0.95,  # Remove very common words
+                stop_words='english'
+            )),
+            # Character-level features for catching marketing patterns
+            ("char", TfidfVectorizer(
+                analyzer="char", 
+                ngram_range=(3, 6), 
+                min_df=2,
+                max_df=0.95
+            )),
         ]
     )
 
     clf = Pipeline(
         [
-            ("prep", preprocessor),
+            ("features", text_features),
             (
                 "clf",
                 LogisticRegression(
                     class_weight="balanced",
-                    max_iter=250,
+                    max_iter=500,  # Increased for better convergence
                     solver="saga",
                     n_jobs=-1,
-                    verbose=1,  # Enable sklearn verbose output
+                    verbose=1,
+                    C=1.0,  # Regularization strength
                 ),
             ),
         ]
