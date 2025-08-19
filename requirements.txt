@@ -3,3 +3,7 @@ requests
 nltk
 psutil
 scikit-learn
+sqlalchemy
+dotenv
+pymysql
+tqdm
