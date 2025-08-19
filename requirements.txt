@@ -2,3 +2,4 @@ wordfreq
 requests
 nltk
 psutil
+scikit-learn

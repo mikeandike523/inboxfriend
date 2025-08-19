@@ -335,6 +335,25 @@ def cmd_classify_auto(args):
         print("Stopping automatic classification.")
 
 
+def cmd_smart_classify(args):
+    params = {"n": args.n}
+    r = requests.get(f"{BASE_URL}/emails/smart-classify", params=params)
+    r.raise_for_status()
+    data = r.json()
+    for i, m in enumerate(data.get("messages", []), 1):
+        pred = m.get("prediction")
+        conf = m.get("confidence")
+        sender = m.get("sender_email")
+        subject = m.get("subject")
+        snippet = m.get("snippet")
+        if conf is not None:
+            print(
+                f"{i:2d}. {pred} ({conf:.2f}) | {sender} | {subject}\n    {snippet}\n"
+            )
+        else:
+            print(f"{i:2d}. {pred} | {sender} | {subject}\n    {snippet}\n")
+
+
 def main():
     p = argparse.ArgumentParser(description="Inbox Tool CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -373,6 +392,12 @@ def main():
         help="Enable before-date optimization when skipping classified emails",
     )
     sub_classify_auto.set_defaults(func=cmd_classify_auto)
+
+    sub_smart = sub.add_parser(
+        "smart-classify", help="Classify emails using trained model"
+    )
+    sub_smart.add_argument("-n", type=int, default=25)
+    sub_smart.set_defaults(func=cmd_smart_classify)
 
     args = p.parse_args()
     if not hasattr(args, "func"):
