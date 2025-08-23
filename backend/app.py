@@ -485,6 +485,15 @@ def emails_smart_classify():
         return jsonify({"messages": messages, "next_page_token": next_token})
 
 
+@app.get("/categories")
+def get_categories():
+    with Session(engine) as s:
+        cats = (
+            s.execute(select(Classification.category).distinct()).scalars().all()
+        )
+    return jsonify({"categories": cats})
+
+
 @app.post("/emails/classify")
 def emails_classify():
     data = request.json or {}
