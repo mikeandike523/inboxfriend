@@ -15,3 +15,6 @@ sentence-transformers
 setfit
 lightning
 huggingface_hub
+openai
+termcolor
+prompt_toolkit
