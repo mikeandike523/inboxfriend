@@ -104,7 +104,7 @@ def _interactive_classify(args, preview=False):
             resp = prompt("> ", completer=completer).strip()
             if not resp or resp.lower() in {"n", "next", "skip", "s"}:
                 break
-            if resp.lower() in {"q", "quit"}:
+            if resp.lower() in {"q", "quit", "e", "end", "x", "exit", "c", "close", "a", "abort"}:
                 print("Quitting.")
                 return
             if resp.lower() == "delete":
