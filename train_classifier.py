@@ -1,3 +1,4 @@
+
 import argparse
 from pathlib import Path
 from sqlalchemy import create_engine, select
@@ -8,6 +9,9 @@ from tqdm import tqdm
 import torch
 import os
 import shutil
+from collections import Counter
+import json
+import datetime
 
 # --- Option B deps ---
 # pip install setfit "sentence-transformers<3" datasets scikit-learn accelerate
@@ -23,6 +27,9 @@ if os.path.isdir("backend/setfit_email_category"):
 
 # GPU Configuration
 ACCELERATE_GB = 8  # GPU memory limit in GB
+
+# Category merging configuration
+MINIMUM_SAMPLES = 45  # Merge categories with less than 60 samples into "other"
 
 
 def setup_gpu_acceleration():
@@ -49,6 +56,49 @@ def setup_gpu_acceleration():
     else:
         print("CUDA not available, using CPU")
         return torch.device("cpu")
+
+
+def merge_tiny_categories(labels_str, min_samples=MINIMUM_SAMPLES):
+    """Merge categories with less than minimum samples into 'other'."""
+    total_samples = len(labels_str)
+    category_counts = Counter(labels_str)
+    
+    print(f"\nApplying filter: minimum {min_samples} samples (out of {total_samples} total)")
+    
+    # Identify categories to keep vs merge
+    keep_categories = set()
+    merge_categories = set()
+    
+    for category, count in category_counts.items():
+        if count >= min_samples:
+            keep_categories.add(category)
+        else:
+            merge_categories.add(category)
+    
+    if merge_categories:
+        print(f"Categories to merge into 'other': {sorted(merge_categories)}")
+        # Show details of what's being merged
+        for category in sorted(merge_categories):
+            count = category_counts[category]
+            percentage = count / total_samples * 100
+            print(f"  - {category}: {count} samples ({percentage:.1f}%)")
+    else:
+        print("No categories need merging")
+    
+    # Apply merging
+    merged_labels = []
+    merge_count = 0
+    for label in labels_str:
+        if label in merge_categories:
+            merged_labels.append("other")
+            merge_count += 1
+        else:
+            merged_labels.append(label)
+    
+    if merge_count > 0:
+        print(f"Merged {merge_count} samples from {len(merge_categories)} categories into 'other'")
+    
+    return merged_labels
 
 
 def load_data(engine):
@@ -81,16 +131,41 @@ def load_data(engine):
         raise ValueError("No training rows found. Ensure the DB has labeled data.")
 
     print(f"Prepared {len(texts)} training samples")
-    dist = {c: labels_str.count(c) for c in set(labels_str)}
-    print("Category distribution:", dist)
+    
+    # Show BEFORE distribution
+    print("\n" + "="*60)
+    print("BEFORE FILTERING - Original category distribution:")
+    print("="*60)
+    original_dist = Counter(labels_str)
+    total_samples = len(labels_str)
+    for category, count in sorted(original_dist.items()):
+        percentage = count / total_samples * 100
+        print(f"  {category}: {count} samples ({percentage:.1f}%)")
+    print(f"Total categories: {len(original_dist)}")
+    print(f"Total samples: {total_samples}")
+    
+    # Merge tiny categories into "other"
+    labels_str = merge_tiny_categories(labels_str)
+    
+    # Show AFTER distribution
+    print("\n" + "="*60)
+    print("AFTER FILTERING - Final category distribution:")
+    print("="*60)
+    final_dist = Counter(labels_str)
+    for category, count in sorted(final_dist.items()):
+        percentage = count / total_samples * 100
+        print(f"  {category}: {count} samples ({percentage:.1f}%)")
+    print(f"Total categories: {len(final_dist)}")
+    print(f"Total samples: {total_samples}")
+    print("="*60)
 
-    # Build mappings between label strings and integers
-    label_list = categories
-    label_to_id = {label: idx for idx, label in enumerate(label_list)}
+    # Build final label mappings
+    final_categories = sorted(set(labels_str))
+    label_to_id = {label: idx for idx, label in enumerate(final_categories)}
     id2label = {idx: label for label, idx in label_to_id.items()}
 
     y = [label_to_id[label] for label in labels_str]
-    return texts, y, label_list, id2label
+    return texts, y, final_categories, id2label
 
 def build_model(label_list):
     """Load a SetFit model (sentence-transformer + linear head)."""
@@ -102,11 +177,30 @@ def build_model(label_list):
     )
     return model
 
+def save_label_metadata(model_dir: Path, final_categories, id2label, label_to_id):
+    """Save label mappings for use in other parts of the application."""
+    metadata = {
+        "categories": final_categories,
+        "id2label": id2label,
+        "label_to_id": label_to_id,
+        "num_labels": len(final_categories),
+        "created_at": datetime.now().isoformat()
+    }
+    
+    metadata_path = model_dir / "label_metadata.json"
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print(f"Saved label metadata to {metadata_path}")
+    return metadata_path
+
 def train_model(engine, model_dir: Path, test_size: float = 0.15, seed: int = 42) -> None:
     # Setup GPU/CPU
     device = setup_gpu_acceleration()
 
     texts, y, label_list, id2label = load_data(engine)
+
+    label_to_id = {label: idx for idx, label in enumerate(label_list)}
 
     # Stratified split
     X_train, X_val, y_train, y_val = train_test_split(
@@ -166,12 +260,14 @@ def train_model(engine, model_dir: Path, test_size: float = 0.15, seed: int = 42
     trainer.model.save_pretrained(str(model_dir))
     print(f"Saved SetFit model to {model_dir}")
 
+    save_label_metadata(model_dir, label_list, id2label, label_to_id)
+
     if device.type == "cuda":
         torch.cuda.empty_cache()
         print("GPU cache cleared")
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train SetFit email classifier (MARKETING/NEWSLETTER/OTHER)")
+    parser = argparse.ArgumentParser(description="Train SetFit email classifier")
     parser.add_argument(
         "--model-dir",
         default=Path(__file__).parent / "backend" / "setfit_email_category",
