@@ -536,23 +536,14 @@ def cmd_classify_auto(args):
         print("Stopping automatic classification.")
 
 
-def cmd_smart_classify(args):
+
+def cmd_experiment_classify_marketing_newsletter_other(args):
     params = {"n": args.n}
-    r = requests.get(f"{BASE_URL}/emails/smart-classify", params=params)
+    r = requests.get(f"{BASE_URL}/emails/experiment-classify-marketing-newsletter-other", params=params, stream=True)
     r.raise_for_status()
-    data = r.json()
-    for i, m in enumerate(data.get("messages", []), 1):
-        pred = m.get("prediction")
-        conf = m.get("confidence")
-        sender = m.get("sender_email")
-        subject = m.get("subject")
-        snippet = m.get("snippet")
-        if conf is not None:
-            print(
-                f"{i:2d}. {pred} ({conf:.2f}) | {sender} | {subject}\n    {snippet}\n"
-            )
-        else:
-            print(f"{i:2d}. {pred} | {sender} | {subject}\n    {snippet}\n")
+    for line in r.iter_lines(decode_unicode=True):
+        if line:
+            print(line)
 
 
 def main():
@@ -594,11 +585,12 @@ def main():
     )
     sub_classify_auto.set_defaults(func=cmd_classify_auto)
 
-    sub_smart = sub.add_parser(
-        "smart-classify", help="Classify emails using trained model"
+    sub_exp = sub.add_parser(
+        "experiment-classify-marketing-newsletter-other",
+        help="Dry-run classification via SetFit marketing/newsletter/other"
     )
-    sub_smart.add_argument("-n", type=int, default=25)
-    sub_smart.set_defaults(func=cmd_smart_classify)
+    sub_exp.add_argument("-n", type=int, default=25)
+    sub_exp.set_defaults(func=cmd_experiment_classify_marketing_newsletter_other)
 
     args = p.parse_args()
     if not hasattr(args, "func"):

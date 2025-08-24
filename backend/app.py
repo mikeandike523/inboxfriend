@@ -2,12 +2,14 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
-from flask import Flask, request, jsonify, redirect, make_response
+from flask import Flask, request, jsonify, redirect, make_response, Response
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 import os
 import requests
-from joblib import load
+
+from setfit import SetFitModel
+from termcolor import colored
 
 from config import Config
 from models import Base, Token, Message, Classification
@@ -39,22 +41,6 @@ GOOGLE_CLIENT_CONFIG = {
 }
 
 SCOPES = app.config["GOOGLE_SCOPES"]
-
-MODEL_PATH = os.getenv(
-    "CLASSIFIER_MODEL_PATH",
-    os.path.join(os.path.dirname(__file__), "classifier.joblib"),
-)
-_classifier_model = None
-
-
-def get_classifier_model():
-    global _classifier_model
-    if _classifier_model is None:
-        try:
-            _classifier_model = load(MODEL_PATH)
-        except Exception:
-            _classifier_model = None
-    return _classifier_model
 
 # -----------------------------
 # Helpers
@@ -346,6 +332,42 @@ def emails_stream():
 
         return jsonify({"messages": messages, "next_page_token": next_token})
 
+@app.get("/emails/experiment-classify-marketing-newsletter-other")
+def emails_experiment_classify_marketing_newsletter_other():
+    """Dry-run classification of emails into MARKETING/NEWSLETTER/OTHER using SetFit model."""
+    # Load SetFit model
+    model_dir = os.path.join(os.path.dirname(__file__), "setfit_marketing_newsletter_other")
+    model = SetFitModel.from_pretrained(model_dir)
+    # Prepare Gmail client
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+    # Stream email previews
+    n = int(request.args.get("n", 25))
+    stream = GmailPreviewMessageStream(gmail, batch_size=n)
+    stream._next_page_token = request.args.get("page_token")
+
+    def generate():
+        while True:
+            batch, next_token = stream.next_batch()
+            if not batch:
+                break
+            # Prepare inputs for model
+            texts = [f"{m.get('subject') or ''} {m.get('snippet') or ''}".strip() for m in batch]
+            preds = model.predict(texts)
+            probas = model.predict_proba(texts) if hasattr(model, "predict_proba") else None
+            for m, pred, proba in zip(batch, preds, probas or [None] * len(preds)):
+                conf = float(max(proba)) if proba is not None else None
+                label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
+                subject = m.get("subject") or ""
+                snippet = m.get("snippet") or ""
+                if conf is not None:
+                    yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
+                else:
+                    yield f"{label} | {subject}\n    {snippet}\n"
+
+    return Response(generate(), mimetype="text/plain")
+
 
 @app.get("/emails/stream-preview")
 def emails_stream_preview():
@@ -403,84 +425,6 @@ def emails_stream_preview():
             if batch or not next_token:
                 messages = batch
                 break
-
-        return jsonify({"messages": messages, "next_page_token": next_token})
-
-
-@app.get("/emails/smart-classify")
-def emails_smart_classify():
-    n = int(request.args.get("n", 25))
-    page_token = request.args.get("page_token")
-    skip_classified = request.args.get("skip_classified", "true").lower() == "true"
-    use_before = request.args.get("use_before", "true").lower() == "true"
-    if n <= 0 or n > 100:
-        return jsonify({"error": "n must be 1..100"}), 400
-
-    model = get_classifier_model()
-    if model is None:
-        return jsonify({"error": "classifier model not available"}), 500
-
-    with Session(engine) as s:
-        creds, user_email = get_current_user_creds(s)
-        gmail = build("gmail", "v1", credentials=creds)
-
-        before: str | None = None
-        if skip_classified and use_before:
-            last_id = s.execute(
-                select(Message.gmail_id)
-                .join(Classification)
-                .order_by(Classification.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if last_id:
-                try:
-                    msg = (
-                        gmail.users()
-                        .messages()
-                        .get(userId="me", id=last_id, format="metadata")
-                        .execute()
-                    )
-                    internal = msg.get("internalDate")
-                    if internal:
-                        dt = datetime.fromtimestamp(int(internal) / 1000, tz=timezone.utc)
-                        before = (dt + timedelta(days=1)).strftime("%Y/%m/%d")
-                except Exception:
-                    before = None
-
-        stream = GmailPreviewMessageStream(gmail, batch_size=n, before=before)
-        stream._next_page_token = page_token
-
-        messages = []
-        next_token = None
-        while True:
-            batch, next_token = stream.next_batch()
-            if skip_classified and batch:
-                ids = [m["id"] for m in batch]
-                classified_ids = set(
-                    s.execute(
-                        select(Message.gmail_id)
-                        .join(Classification)
-                        .where(Message.gmail_id.in_(ids))
-                    ).scalars()
-                )
-                batch = [m for m in batch if m["id"] not in classified_ids]
-            if batch or not next_token:
-                messages = batch
-                break
-
-        if messages:
-            X = []
-            for m in messages:
-                text = f"{m.get('subject') or ''} {m.get('content') or ''}".strip()
-                email = m.get("sender_email")
-                domain = email.split("@")[-1] if email and "@" in email else ""
-                X.append((text, domain))
-            preds = model.predict(X)
-            probas = model.predict_proba(X) if hasattr(model, "predict_proba") else None
-            for i, m in enumerate(messages):
-                m["prediction"] = preds[i]
-                if probas is not None:
-                    m["confidence"] = float(max(probas[i]))
 
         return jsonify({"messages": messages, "next_page_token": next_token})
 
