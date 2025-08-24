@@ -382,15 +382,15 @@ def classify_auto(rules, n, use_before_date):
 def declutter(n, classes, dry_run, list_classes, before_this_year):
     """Preview and delete clutter emails (marketing/newsletter/etc.); use --dry-run to preview only"""
     if list_classes:
-        # fetch available classes from backend
-        resp = requests.get(f"{BASE_URL}/categories")
+        # fetch available pretrained model classes from backend
+        resp = requests.get(f"{BASE_URL}/categories?model=true")
         resp.raise_for_status()
         for cls in resp.json().get("categories", []):
             click.echo(cls)
         return
     
-    # Validate provided classes against available classes
-    resp = requests.get(f"{BASE_URL}/categories")
+    # Validate provided classes against available pretrained model classes
+    resp = requests.get(f"{BASE_URL}/categories?model=true")
     resp.raise_for_status()
     available_classes = resp.json().get("categories", [])
     available_classes_lower = [cls.lower() for cls in available_classes]
