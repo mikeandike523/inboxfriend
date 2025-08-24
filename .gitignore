@@ -2,7 +2,6 @@
 .env
 db_data
 personal-rules
-backend/classifier.joblib
-backend/setfit_marketing_newsletter_other
+backend/setfit_clutter
 checkpoints
 OPENAI_API_KEY.txt

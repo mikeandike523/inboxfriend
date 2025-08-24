@@ -8,6 +8,7 @@ from tqdm import tqdm
 import re
 import torch
 import os
+import shutil
 
 # --- Option B deps ---
 # pip install setfit "sentence-transformers<3" datasets scikit-learn accelerate
@@ -16,13 +17,18 @@ from setfit import SetFitModel, Trainer, TrainingArguments
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
+if os.path.isdir("checkpoints"):
+    shutil.rmtree("checkpoints")
+if os.path.isdir("backend/setfit_clutter"):
+    shutil.rmtree("backend/setfit_clutter")
+
 # GPU Configuration
 ACCELERATE_GB = 8  # GPU memory limit in GB
 
 # Target categories - anything not in this list will be classified as "OTHER"
-TARGET_CATEGORIES = ["MARKETING", "NEWSLETTER"]
+TARGET_CATEGORIES = ["MARKETING", "NEWSLETTER", "NOTIFICATION"]
 
-LABEL_MAP_CANONICAL = {"MARKETING": 0, "NEWSLETTER": 1, "OTHER": 2}
+LABEL_MAP_CANONICAL = {"MARKETING": 0, "NEWSLETTER": 1, "NOTIFICATION": 2, "OTHER": 2}
 ID2LABEL = {v: k for k, v in LABEL_MAP_CANONICAL.items()}
 
 NORMALIZE_EQUIV = {
@@ -30,7 +36,12 @@ NORMALIZE_EQUIV = {
     "MARKETING": "MARKETING", "MKT": "MARKETING", "MKTG": "MARKETING",
     "PROMO": "MARKETING", "AD": "MARKETING", "ADVERT": "MARKETING",
     # Newsletter variants
-    "NEWSLETTER": "NEWSLETTER", "NL": "NEWSLETTER", "NEWSLETTERS": "NEWSLETTER"
+    "NEWSLETTER": "NEWSLETTER", "NL": "NEWSLETTER", "NEWSLETTERS": "NEWSLETTER",
+    # Notification variants
+    "NOTIFICATIONS": "NOTIFICATION", "UPDATES": "NOTIFICATION", "UPDATE": "NOTIFICATION",
+    "ALERT":"NOTIFICATION", "ALERTS": "NOTIFICATION", "CONFIRMATION": "NOTIFICATION",
+    "CONFIRMATIONS": "NOTIFICATION", "REMINDER": "NOTIFICATION","REMINDERS": "NOTIFICATION",
+    
 }
 
 def setup_gpu_acceleration():
@@ -80,7 +91,7 @@ def load_data(engine):
 
     texts, labels = [], []
     for subject, content, category in tqdm(rows, desc="Processing messages"):
-        text = f"{subject or ''} {content or ''}".strip()
+        text = f"Subject: {subject or ''}\nBody:\n{content or ''}".strip()
         label = normalize_label(category)
         if label not in TARGET_CATEGORIES:
             label = "OTHER"
@@ -182,7 +193,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train SetFit email classifier (MARKETING/NEWSLETTER/OTHER)")
     parser.add_argument(
         "--model-dir",
-        default=Path(__file__).parent / "backend" / "setfit_marketing_newsletter_other",
+        default=Path(__file__).parent / "backend" / "setfit_clutter",
         type=Path,
         help="Directory to save the trained SetFit model",
     )
