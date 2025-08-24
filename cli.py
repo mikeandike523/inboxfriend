@@ -117,7 +117,9 @@ def _interactive_classify(args, preview=False):
             if resp.lower() in {"q", "quit", "e", "end", "x", "exit", "c", "close", "a", "abort"}:
                 print("Quitting.")
                 return
-            if resp.startswith("MOVE "):
+            # Immediate delete or move command takes precedence over categorization
+            lresp = resp.lower()
+            if lresp.startswith("move "):
                 label = resp[5:].strip()
                 if not label:
                     continue
@@ -130,14 +132,22 @@ def _interactive_classify(args, preview=False):
                 else:
                     print(f"Moved to {label}.")
                 break
-            if resp.lower() == "delete":
+            if lresp == "delete":
                 requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
                 print("Deleted.")
                 break
+            # Check for delete or move suffix after categorization
             delete = False
-            if resp.endswith(" DELETE"):
+            move_label = None
+            # suffix delete
+            if resp.upper().endswith(" DELETE"):
                 delete = True
                 resp = resp[:-7].strip()
+            # suffix move
+            suffix_match = re.match(r"^(.*)\s+MOVE\s+(.+)$", resp, flags=re.IGNORECASE)
+            if suffix_match:
+                resp = suffix_match.group(1).strip()
+                move_label = suffix_match.group(2).strip()
             category = resp
             if not category:
                 continue
@@ -171,6 +181,17 @@ def _interactive_classify(args, preview=False):
                 print(f"Categorized as {category} and deleted.")
             else:
                 print(f"Categorized as {category}.")
+            # perform move if requested after categorization
+            if move_label:
+                rmove = requests.post(
+                    f"{BASE_URL}/emails/move",
+                    json={"id": msg["id"], "label": move_label},
+                )
+                if rmove.status_code != 200:
+                    print(colored(f"Unknown label: {move_label}", "yellow"))
+                    continue
+                else:
+                    print(f"Moved to {move_label}.")
             break
 
 
