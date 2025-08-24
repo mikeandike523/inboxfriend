@@ -3,5 +3,10 @@
     "subject": "YouTube",
     "category": "youtube",
     "delete": false
+  },
+  {
+    "subject": "Yearly Report",
+    "category": "report",
+    "delete": "before-this-year"
   }
 ]

@@ -10,6 +10,8 @@ import click
 from termcolor import colored
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
+import datetime
+from email.utils import parsedate_to_datetime
 
 def is_running_in_git_bash():
     try:
@@ -278,13 +280,12 @@ def classify_auto(rules, n, use_before_date):
             patterns["content"] = re.compile(rule["preview"], re.IGNORECASE)
         if not patterns:
             continue
-        compiled_rules.append(
-            {
-                "patterns": patterns,
-                "category": rule.get("category"),
-                "delete": bool(rule.get("delete")),
-            }
-        )
+        compiled_rules.append({
+            "patterns": patterns,
+            "category": rule.get("category"),
+            # delete may be a boolean or special indicator string (e.g. "before-this-year")
+            "delete": rule.get("delete", False),
+        })
 
     page_token = None
     batch = []
@@ -313,6 +314,20 @@ def classify_auto(rules, n, use_before_date):
             for rule in compiled_rules:
                 patterns = rule["patterns"]
                 if all(patterns[field].search(msg.get(field, "") or "") for field in patterns):
+                    # Determine whether to delete based on delete config
+                    delete_cfg = rule["delete"]
+                    if isinstance(delete_cfg, bool):
+                        do_delete = delete_cfg
+                    elif isinstance(delete_cfg, str) and delete_cfg == "before-this-year":
+                        # parse email date header and delete if before current year
+                        try:
+                            dt = parsedate_to_datetime(msg.get("date", ""))
+                            do_delete = dt.year < datetime.datetime.now(dt.tzinfo).year
+                        except Exception:
+                            do_delete = False
+                    else:
+                        do_delete = False
+
                     payload = {
                         "id": msg["id"],
                         "subject": msg.get("subject"),
@@ -320,10 +335,10 @@ def classify_auto(rules, n, use_before_date):
                         "sender_email": msg.get("sender_email"),
                         "content": msg.get("content"),
                         "category": rule["category"],
-                        "delete": rule["delete"],
+                        "delete": do_delete,
                     }
                     requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
-                    if rule["delete"]:
+                    if do_delete:
                         click.echo(
                             f"Categorized as {rule['category']} and deleted: {msg.get('subject')}"
                         )
