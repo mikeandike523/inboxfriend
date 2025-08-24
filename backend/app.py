@@ -374,6 +374,7 @@ def emails_experiment_classify_marketing_newsletter_other():
 @app.get("/emails/delete-marketing-and-newsletters")
 def emails_delete_marketing_and_newsletters():
     """Preview marketing/newsletter emails and delete them automatically."""
+    model_server_url = app.config["MODEL_SERVER_URL"]
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
@@ -386,11 +387,27 @@ def emails_delete_marketing_and_newsletters():
             batch, next_token = stream.next_batch()
             if not batch:
                 break
-            for m in batch:
+            # Classify batch via external model service
+            texts = [f"{m.get('subject') or ''} {m.get('snippet') or ''}".strip() for m in batch]
+            resp = requests.post(f"{model_server_url}/predict", json={"texts": texts}, timeout=30)
+            resp.raise_for_status()
+            result = resp.json()
+            preds = result.get("predictions", [])
+            probas = result.get("probabilities") or [None] * len(preds)
+            for m, pred, proba in zip(batch, preds, probas):
+                conf = float(max(proba)) if proba is not None else None
                 subject = m.get("subject") or ""
                 snippet = m.get("snippet") or ""
-                gmail.users().messages().delete(userId="me", id=m["id"]).execute()
-                yield f"Deleted | {subject}\n    {snippet}\n"
+                # Delete only marketing/newsletter with sufficient confidence
+                if conf is not None and conf >= 0.95 and pred in ("MARKETING", "NEWSLETTER"):
+                    gmail.users().messages().delete(userId="me", id=m["id"]).execute()
+                    yield f"Deleted ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
+                else:
+                    label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
+                    if conf is not None:
+                        yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
+                    else:
+                        yield f"{label} | {subject}\n    {snippet}\n"
 
     return Response(generate(), mimetype="text/plain")
 
