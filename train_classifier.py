@@ -101,14 +101,32 @@ def merge_tiny_categories(labels_str, min_samples=MINIMUM_SAMPLES):
     return merged_labels
 
 
-def load_data(engine):
+def load_data(engine, equivalency_map=None):
     """Load labeled messages and build raw text dataset (subject + content)."""
     print("Loading training data from database...")
     with Session(engine) as s:
         # Fetch distinct classes from the database
         distinct_stmt = select(Classification.category).distinct().order_by(Classification.category)
         categories = s.execute(distinct_stmt).scalars().all()
-        print(f"Found classes: {categories}")
+    print(f"Found classes: {categories}")
+
+    # Validate equivalency_map keys and targets against DB categories
+    if equivalency_map:
+        srcs = set(equivalency_map)
+        invalid_src = srcs - set(categories)
+        if invalid_src:
+            raise ValueError(
+                f"Equivalency map contains unknown source categories: {sorted(invalid_src)}"
+            )
+        invalid_tgt = {
+            tgt for tgt in equivalency_map.values()
+            if tgt is not None and tgt != 'other' and tgt not in categories
+        }
+        if invalid_tgt:
+            raise ValueError(
+                f"Equivalency map contains invalid target categories: {sorted(invalid_tgt)}; "
+                f"targets must be one of {sorted(categories)} or 'other' or null"
+            )
 
         # Fetch all labeled messages
         rows = s.execute(
@@ -129,6 +147,30 @@ def load_data(engine):
 
     if not labels_str:
         raise ValueError("No training rows found. Ensure the DB has labeled data.")
+
+    # Apply any user-supplied equivalency mapping before filtering
+    if equivalency_map:
+        print(f"\nApplying equivalency mapping for {len(equivalency_map)} entries")
+        mapped = 0
+        dropped = 0
+        texts2, labels2 = [], []
+        for text, lbl in zip(texts, labels_str):
+            if lbl in equivalency_map:
+                target = equivalency_map[lbl]
+                if target is None:
+                    # exclude this sample entirely
+                    dropped += 1
+                    continue
+                # explicit 'other' stays in other bucket
+                new_lbl = "other" if target == "other" else target
+                if new_lbl != lbl:
+                    mapped += 1
+                labels2.append(new_lbl)
+            else:
+                labels2.append(lbl)
+            texts2.append(text)
+        texts, labels_str = texts2, labels2
+        print(f"Mapped {mapped} samples and dropped {dropped} samples via equivalency map")
 
     print(f"Prepared {len(texts)} training samples")
     
@@ -194,11 +236,12 @@ def save_label_metadata(model_dir: Path, final_categories, id2label, label_to_id
     print(f"Saved label metadata to {metadata_path}")
     return metadata_path
 
-def train_model(engine, model_dir: Path, test_size: float = 0.15, seed: int = 42) -> None:
+def train_model(engine, model_dir: Path, test_size: float = 0.15, seed: int = 42,
+                equivalency_map: dict = None) -> None:
     # Setup GPU/CPU
     device = setup_gpu_acceleration()
 
-    texts, y, label_list, id2label = load_data(engine)
+    texts, y, label_list, id2label = load_data(engine, equivalency_map)
 
     label_to_id = {label: idx for idx, label in enumerate(label_list)}
 
@@ -280,10 +323,32 @@ def main() -> None:
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for splitting"
     )
+    parser.add_argument(
+        "--equivalency-map",
+        type=Path,
+        default=None,
+        help=(
+            "JSON file mapping original categories to equivalent categories; "
+            "values of null mean exclude those samples entirely, "
+            "the string 'other' maps them to 'other'."
+        ),
+    )
     args = parser.parse_args()
 
+    # Load optional equivalency mapping
+    equivalency_map = None
+    if args.equivalency_map:
+        with open(args.equivalency_map, 'r') as f:
+            equivalency_map = json.load(f)
+
     engine = create_engine(Config.DB_URL_EXTERNAL, future=True)
-    train_model(engine, args.model_dir, test_size=args.test_size, seed=args.seed)
+    train_model(
+        engine,
+        args.model_dir,
+        test_size=args.test_size,
+        seed=args.seed,
+        equivalency_map=equivalency_map,
+    )
 
 if __name__ == "__main__":
     main()
