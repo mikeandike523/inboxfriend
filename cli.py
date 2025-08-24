@@ -546,6 +546,15 @@ def cmd_experiment_classify_marketing_newsletter_other(args):
             print(line)
 
 
+def cmd_delete_marketing_and_newsletters(args):
+    params = {"n": args.n}
+    r = requests.get(f"{BASE_URL}/emails/delete-marketing-and-newsletters", params=params, stream=True)
+    r.raise_for_status()
+    for line in r.iter_lines(decode_unicode=True):
+        if line:
+            print(line)
+
+
 def main():
     p = argparse.ArgumentParser(description="Inbox Tool CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -591,6 +600,13 @@ def main():
     )
     sub_exp.add_argument("-n", type=int, default=25)
     sub_exp.set_defaults(func=cmd_experiment_classify_marketing_newsletter_other)
+
+    sub_del = sub.add_parser(
+        "delete-marketing-and-newsletters",
+        help="Preview marketing/newsletter emails and delete them automatically"
+    )
+    sub_del.add_argument("-n", type=int, default=25)
+    sub_del.set_defaults(func=cmd_delete_marketing_and_newsletters)
 
     args = p.parse_args()
     if not hasattr(args, "func"):

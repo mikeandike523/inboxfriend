@@ -371,6 +371,30 @@ def emails_experiment_classify_marketing_newsletter_other():
     return Response(generate(), mimetype="text/plain")
 
 
+@app.get("/emails/delete-marketing-and-newsletters")
+def emails_delete_marketing_and_newsletters():
+    """Preview marketing/newsletter emails and delete them automatically."""
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+    n = int(request.args.get("n", 25))
+    stream = GmailPreviewMessageStream(gmail, batch_size=n)
+    stream._next_page_token = request.args.get("page_token")
+
+    def generate():
+        while True:
+            batch, next_token = stream.next_batch()
+            if not batch:
+                break
+            for m in batch:
+                subject = m.get("subject") or ""
+                snippet = m.get("snippet") or ""
+                gmail.users().messages().delete(userId="me", id=m["id"]).execute()
+                yield f"Deleted | {subject}\n    {snippet}\n"
+
+    return Response(generate(), mimetype="text/plain")
+
+
 @app.get("/emails/stream-preview")
 def emails_stream_preview():
     n = int(request.args.get("n", 25))
