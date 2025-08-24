@@ -381,7 +381,14 @@ def emails_declutter():
     n = int(request.args.get("n", 25))
     classes = request.args.getlist("classes") or ["MARKETING", "NEWSLETTER", "NOTIFICATION"]
     dry_run = request.args.get("dry_run", "false").lower() == "true"
-    stream = GmailPreviewMessageStream(gmail, batch_size=n)
+    before_this_year = request.args.get("before_this_year", "false").lower() == "true"
+    # Restrict to messages before the start of the current year if requested
+    before = None
+    if before_this_year:
+        now = datetime.now(timezone.utc)
+        start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+        before = start.strftime("%Y/%m/%d")
+    stream = GmailPreviewMessageStream(gmail, batch_size=n, before=before)
     stream._next_page_token = request.args.get("page_token")
 
     def generate():

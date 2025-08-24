@@ -245,15 +245,31 @@ def recent_emails(n):
 
 @cli.command()
 @click.option("-n", default=25, help="Number of emails to process per batch")
-def classify(n):
+@click.option("--list", "list_categories", is_flag=True,
+              help="List available categories and exit")
+def classify(n, list_categories):
     """Interactive email classifier"""
+    if list_categories:
+        r = requests.get(f"{BASE_URL}/categories")
+        r.raise_for_status()
+        for i, cat in enumerate(r.json().get("categories", [])):
+            click.echo(f"{i}: {cat}")
+        return
     _interactive_classify(n, preview=False)
 
 
 @cli.command("classify-preview")
 @click.option("-n", default=25, help="Number of emails to process per batch")
-def classify_preview(n):
+@click.option("--list", "list_categories", is_flag=True,
+              help="List available categories and exit")
+def classify_preview(n, list_categories):
     """Interactive classifier using Gmail previews"""
+    if list_categories:
+        r = requests.get(f"{BASE_URL}/categories")
+        r.raise_for_status()
+        for i, cat in enumerate(r.json().get("categories", [])):
+            click.echo(f"{i}: {cat}")
+        return
     _interactive_classify(n, preview=True)
 
 
@@ -355,18 +371,29 @@ def classify_auto(rules, n, use_before_date):
 
 
 @cli.command()
+@click.option("--list", "list_classes", is_flag=True,
+              help="List available clutter classes and exit")
+@click.option("--before-this-year", "before_this_year", is_flag=True,
+              help="Only process emails from before the current year")
 @click.option("-n", default=25, help="Number of emails to process per batch")
-@click.option("-c", "--classes", multiple=True, 
+@click.option("-c", "--classes", multiple=True,
               default=["MARKETING", "NEWSLETTER", "NOTIFICATION"],
               help="List of classes to treat as clutter")
-@click.option("--dry-run", is_flag=True, 
+@click.option("--dry-run", is_flag=True,
               help="Dry run: show which emails would be deleted without actually deleting them")
-def declutter(n, classes, dry_run):
+def declutter(n, classes, dry_run, list_classes, before_this_year):
     """Preview and delete clutter emails (marketing/newsletter/etc.); use --dry-run to preview only"""
+    if list_classes:
+        for cls in classes:
+            click.echo(cls)
+        return
     params = {"n": n, "classes": list(classes)}
     if dry_run:
         params["dry_run"] = "true"
         click.echo("Dry run mode: no messages will be deleted.")
+    if before_this_year:
+        params["before_this_year"] = "true"
+        click.echo("Only processing emails from before the current year.")
     r = requests.get(f"{BASE_URL}/emails/declutter", params=params, stream=True)
     r.raise_for_status()
     for line in r.iter_lines(decode_unicode=True):
