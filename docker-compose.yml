@@ -38,7 +38,11 @@ services:
       DB_URL: ${DB_URL:-mysql+pymysql://${MYSQL_USER:-inbox}:${MYSQL_PASSWORD:-inboxpass}@mysql:3307/${MYSQL_DATABASE:-inboxapp}}
       FLASK_RUN_HOST: 0.0.0.0
       FLASK_RUN_PORT: 5000
+      MODEL_SERVER_URL: ${MODEL_SERVER_URL:-http://host.docker.internal:8000}
     ports:
       - "5000:5000"
     depends_on:
       - mysql
+    # Allow backend container to resolve host.docker.internal to host gateway for model server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -18,3 +18,4 @@ huggingface_hub
 openai
 termcolor
 prompt_toolkit
+flask

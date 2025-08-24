@@ -11,3 +11,5 @@ class Config:
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
     OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "http://localhost:5000/auth/callback")
     GOOGLE_SCOPES = os.getenv("GOOGLE_SCOPES", "").split()
+    # URL of external model server (serving SetFit classifications)
+    MODEL_SERVER_URL = os.getenv("MODEL_SERVER_URL", "http://host.docker.internal:8000")

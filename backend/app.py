@@ -6,9 +6,8 @@ from flask import Flask, request, jsonify, redirect, make_response, Response
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 import os
-import requests
 
-from setfit import SetFitModel
+import requests
 from termcolor import colored
 
 from config import Config
@@ -335,14 +334,12 @@ def emails_stream():
 @app.get("/emails/experiment-classify-marketing-newsletter-other")
 def emails_experiment_classify_marketing_newsletter_other():
     """Dry-run classification of emails into MARKETING/NEWSLETTER/OTHER using SetFit model."""
-    # Load SetFit model
-    model_dir = os.path.join(os.path.dirname(__file__), "setfit_marketing_newsletter_other")
-    model = SetFitModel.from_pretrained(model_dir)
-    # Prepare Gmail client
+    """Dry-run classification of emails into MARKETING/NEWSLETTER/OTHER via external model service."""
+    model_server_url = app.config["MODEL_SERVER_URL"]
+    # Prepare Gmail client stream
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
-    # Stream email previews
     n = int(request.args.get("n", 25))
     stream = GmailPreviewMessageStream(gmail, batch_size=n)
     stream._next_page_token = request.args.get("page_token")
@@ -352,11 +349,16 @@ def emails_experiment_classify_marketing_newsletter_other():
             batch, next_token = stream.next_batch()
             if not batch:
                 break
-            # Prepare inputs for model
+            # Prepare inputs for model server
             texts = [f"{m.get('subject') or ''} {m.get('snippet') or ''}".strip() for m in batch]
-            preds = model.predict(texts)
-            probas = model.predict_proba(texts) if hasattr(model, "predict_proba") else None
-            for m, pred, proba in zip(batch, preds, probas or [None] * len(preds)):
+            resp = requests.post(
+                f"{model_server_url}/predict", json={"texts": texts}, timeout=30
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            preds = result.get("predictions", [])
+            probas = result.get("probabilities") or [None] * len(preds)
+            for m, pred, proba in zip(batch, preds, probas):
                 conf = float(max(proba)) if proba is not None else None
                 label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
                 subject = m.get("subject") or ""
