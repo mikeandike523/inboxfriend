@@ -22,6 +22,134 @@ def is_running_in_git_bash():
 
 BASE_URL = "http://localhost:5000"
 
+def _interactive_classify(args, preview=False):
+    page_token = None
+    batch = []
+    r = requests.get(f"{BASE_URL}/categories")
+    r.raise_for_status()
+    categories = r.json().get("categories", [])
+    category_set = set(c.lower() for c in categories)
+    completer = WordCompleter(categories, ignore_case=True)
+    while True:
+        if not batch:
+            print("Loading more emails...")
+            params = {"n": args.n, "skip_classified": "true"}
+            if page_token:
+                params["page_token"] = page_token
+            endpoint = "emails/stream-preview" if preview else "emails/stream"
+            r = requests.get(f"{BASE_URL}/{endpoint}", params=params)
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("messages", [])
+            page_token = data.get("next_page_token")
+            if not batch:
+                print("No more messages.")
+                return
+
+        msg = batch.pop(0)
+
+        os.system("cls" if os.name == "nt" and not is_running_in_git_bash() else "clear")
+
+        cols, rows = shutil.get_terminal_size((80, 20))
+        max_lines = int(rows * 0.8)
+
+        from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
+        subject_line = "Subject: " + str(msg.get("subject"))
+        date_line = "Date: " + str(msg.get("date"))
+        thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
+
+        left_width = int(cols * 0.75)
+        right_width = cols - left_width - 1
+
+        left_lines = []
+        left_lines.extend(textwrap.wrap(date_line, width=left_width))
+        left_lines.extend(textwrap.wrap(from_line, width=left_width))
+        left_lines.extend(textwrap.wrap(subject_line, width=left_width))
+        left_lines.extend(textwrap.wrap(thread_line, width=left_width))
+
+        available_lines = max_lines - len(left_lines)
+        content = msg.get("content", "") or ""
+        for content_line in content.splitlines():
+            if available_lines <= 0:
+                break
+            if not content_line.strip():
+                left_lines.append("")
+                available_lines -= 1
+            else:
+                wrapped_content = textwrap.wrap(content_line, width=left_width)
+                if not wrapped_content:
+                    wrapped_content = [""]
+                if len(wrapped_content) <= available_lines:
+                    left_lines.extend(wrapped_content)
+                    available_lines -= len(wrapped_content)
+                else:
+                    left_lines.extend(wrapped_content[:available_lines])
+                    available_lines = 0
+                    break
+
+        right_lines = []
+        for cat in categories:
+            if len(cat) <= right_width:
+                right_lines.append(cat)
+            else:
+                right_lines.extend(textwrap.wrap(cat, width=right_width))
+
+        total_lines = min(max(len(left_lines), len(right_lines)), max_lines)
+        for i in range(total_lines):
+            left = left_lines[i] if i < len(left_lines) else ""
+            right = right_lines[i] if i < len(right_lines) else ""
+            print(f"{left.ljust(left_width)} {right}")
+
+        while True:
+            resp = prompt("> ", completer=completer).strip()
+            if not resp or resp.lower() in {"n", "next", "skip", "s"}:
+                break
+            if resp.lower() in {"q", "quit"}:
+                print("Quitting.")
+                return
+            if resp.lower() == "delete":
+                requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
+                print("Deleted.")
+                break
+            delete = False
+            if resp.endswith(" DELETE"):
+                delete = True
+                resp = resp[:-7].strip()
+            category = resp
+            if not category:
+                continue
+            if category.lower() not in category_set:
+                if category.startswith("! "):
+                    category = category[2:].strip()
+                    if not category:
+                        continue
+                    categories.append(category)
+                    category_set.add(category.lower())
+                    completer = WordCompleter(categories, ignore_case=True)
+                else:
+                    print(
+                        colored(
+                            "Unknown category. To force-add a category, type a ! followed by a space, and then the category.",
+                            "yellow",
+                        )
+                    )
+                    continue
+            payload = {
+                "id": msg["id"],
+                "subject": msg.get("subject"),
+                "sender_name": msg.get("sender_name"),
+                "sender_email": msg.get("sender_email"),
+                "content": msg.get("content"),
+                "category": category,
+                "delete": delete,
+            }
+            requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
+            if delete:
+                print(f"Categorized as {category} and deleted.")
+            else:
+                print(f"Categorized as {category}.")
+            break
+
 
 def cmd_login(args):
     r = requests.get(f"{BASE_URL}/auth/login")
@@ -313,6 +441,12 @@ def cmd_classify_preview(args):
             else:
                 print(f"Categorized as {category}.")
             break
+
+def cmd_classify(args):
+    _interactive_classify(args, preview=False)
+
+def cmd_classify_preview(args):
+    _interactive_classify(args, preview=True)
 
 def cmd_classify_auto(args):
     with open(args.rules) as f:
