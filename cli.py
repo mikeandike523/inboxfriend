@@ -21,6 +21,16 @@ def is_running_in_git_bash():
 
 
 BASE_URL = "http://localhost:5000"
+ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+def _pad_right(s: str, width: int) -> str:
+    """Pad string s with spaces on the right to ensure its visible length is width."""
+    # strip ANSI escape sequences for length calculation
+    stripped = ANSI_ESCAPE.sub('', s)
+    pad_len = width - len(stripped)
+    if pad_len <= 0:
+        return s
+    return s + ' ' * pad_len
 
 def _interactive_classify(args, preview=False):
     page_token = None
@@ -98,7 +108,7 @@ def _interactive_classify(args, preview=False):
         for i in range(total_lines):
             left = left_lines[i] if i < len(left_lines) else ""
             right = right_lines[i] if i < len(right_lines) else ""
-            print(f"{left.ljust(left_width)} {right}")
+            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
 
         while True:
             resp = prompt("> ", completer=completer).strip()
@@ -263,7 +273,7 @@ def cmd_classify(args):
         for i in range(total_lines):
             left = left_lines[i] if i < len(left_lines) else ""
             right = right_lines[i] if i < len(right_lines) else ""
-            print(f"{left.ljust(left_width)} {right}")
+            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
 
         while True:
             resp = prompt("> ", completer=completer).strip()
@@ -390,7 +400,7 @@ def cmd_classify_preview(args):
         for i in range(total_lines):
             left = left_lines[i] if i < len(left_lines) else ""
             right = right_lines[i] if i < len(right_lines) else ""
-            print(f"{left.ljust(left_width)} {right}")
+            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
 
         while True:
             resp = prompt("> ", completer=completer).strip()
