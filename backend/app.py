@@ -540,5 +540,34 @@ def emails_delete():
         return jsonify({"ok": True})
 
 
+@app.post("/emails/move")
+def emails_move():
+    data = request.json or {}
+    if "id" not in data or "label" not in data:
+        return jsonify({"error": "missing fields"}), 400
+
+    label_name = data.get("label", "").strip()
+    if not label_name:
+        return jsonify({"error": "missing label"}), 400
+
+    with Session(engine) as s:
+        creds, user_email = get_current_user_creds(s)
+        gmail = build("gmail", "v1", credentials=creds)
+        # Verify label exists
+        labels_resp = gmail.users().labels().list(userId="me").execute()
+        labels = labels_resp.get("labels", []) or []
+        match = next((lbl for lbl in labels if lbl.get("name", "").lower() == label_name.lower()), None)
+        if not match:
+            return jsonify({"error": f"label '{label_name}' not found"}), 400
+
+        # Move message out of INBOX into the given label
+        gmail.users().messages().modify(
+            userId="me",
+            id=data["id"],
+            body={"removeLabelIds": ["INBOX"], "addLabelIds": [match.get("id")]},
+        ).execute()
+        return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

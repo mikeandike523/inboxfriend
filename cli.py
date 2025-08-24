@@ -117,6 +117,19 @@ def _interactive_classify(args, preview=False):
             if resp.lower() in {"q", "quit", "e", "end", "x", "exit", "c", "close", "a", "abort"}:
                 print("Quitting.")
                 return
+            if resp.startswith("MOVE "):
+                label = resp[5:].strip()
+                if not label:
+                    continue
+                rmove = requests.post(
+                    f"{BASE_URL}/emails/move",
+                    json={"id": msg["id"], "label": label},
+                )
+                if rmove.status_code != 200:
+                    print(colored(f"Unknown label: {label}", "yellow"))
+                else:
+                    print(f"Moved to {label}.")
+                break
             if resp.lower() == "delete":
                 requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
                 print("Deleted.")
