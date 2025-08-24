@@ -580,9 +580,9 @@ def cmd_experiment_classify_marketing_newsletter_other(args):
             print(line)
 
 
-def cmd_delete_marketing_and_newsletters(args):
-    params = {"n": args.n}
-    r = requests.get(f"{BASE_URL}/emails/delete-marketing-and-newsletters", params=params, stream=True)
+def cmd_declutter(args):
+    params = {"n": args.n, "classes": args.classes}
+    r = requests.get(f"{BASE_URL}/emails/declutter", params=params, stream=True)
     r.raise_for_status()
     for line in r.iter_lines(decode_unicode=True):
         if line:
@@ -636,11 +636,17 @@ def main():
     sub_exp.set_defaults(func=cmd_experiment_classify_marketing_newsletter_other)
 
     sub_del = sub.add_parser(
-        "delete-marketing-and-newsletters",
-        help="Preview marketing/newsletter emails and delete them automatically"
+        "declutter",
+        help="Preview and delete clutter emails (marketing/newsletter/etc.)"
     )
-    sub_del.add_argument("-n", type=int, default=25)
-    sub_del.set_defaults(func=cmd_delete_marketing_and_newsletters)
+    sub_del.add_argument("-n", type=int, default=25, help="Number of emails to process per batch")
+    sub_del.add_argument(
+        "-c", "--classes",
+        nargs="+",
+        default=["MARKETING", "NEWSLETTER", "NOTIFICATION"],
+        help="List of classes to treat as clutter"
+    )
+    sub_del.set_defaults(func=cmd_declutter)
 
     args = p.parse_args()
     if not hasattr(args, "func"):

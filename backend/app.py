@@ -371,14 +371,15 @@ def emails_experiment_classify_marketing_newsletter_other():
     return Response(generate(), mimetype="text/plain")
 
 
-@app.get("/emails/delete-marketing-and-newsletters")
-def emails_delete_marketing_and_newsletters():
-    """Preview marketing/newsletter emails and delete them automatically."""
+@app.get("/emails/declutter")
+def emails_declutter():
+    """Preview and delete clutter emails based on specified classes."""
     model_server_url = app.config["MODEL_SERVER_URL"]
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
     n = int(request.args.get("n", 25))
+    classes = request.args.getlist("classes") or ["MARKETING", "NEWSLETTER", "NOTIFICATION"]
     stream = GmailPreviewMessageStream(gmail, batch_size=n)
     stream._next_page_token = request.args.get("page_token")
 
@@ -398,8 +399,8 @@ def emails_delete_marketing_and_newsletters():
                 conf = float(max(proba)) if proba is not None else None
                 subject = m.get("subject") or ""
                 snippet = m.get("snippet") or ""
-                # Delete only marketing/newsletter with sufficient confidence
-                if conf is not None and conf >= 0.95 and pred in ("MARKETING", "NEWSLETTER"):
+                # Delete only specified classes with sufficient confidence
+                if conf is not None and conf >= 0.95 and pred in classes:
                     gmail.users().messages().delete(userId="me", id=m["id"]).execute()
                     yield f"Deleted ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
                 else:
