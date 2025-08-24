@@ -32,7 +32,7 @@ def setup_gpu_acceleration():
 device = setup_gpu_acceleration()
 
 # Directory where the trained SetFit model is saved
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "backend", "setfit_marketing_newsletter_other")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "backend", "setfit_clutter")
 
 # Load model at module level and move to GPU
 app.logger.info(f"Loading SetFit model from {MODEL_DIR}")

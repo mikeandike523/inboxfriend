@@ -1,4 +1,3 @@
-import argparse
 import json
 import os
 import re
@@ -7,6 +6,7 @@ import webbrowser
 import requests
 import psutil
 import textwrap
+import click
 from termcolor import colored
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
@@ -32,7 +32,7 @@ def _pad_right(s: str, width: int) -> str:
         return s
     return s + ' ' * pad_len
 
-def _interactive_classify(args, preview=False):
+def _interactive_classify(n, preview=False):
     page_token = None
     batch = []
     r = requests.get(f"{BASE_URL}/categories")
@@ -42,8 +42,8 @@ def _interactive_classify(args, preview=False):
     completer = WordCompleter(categories, ignore_case=True)
     while True:
         if not batch:
-            print("Loading more emails...")
-            params = {"n": args.n, "skip_classified": "true"}
+            click.echo("Loading more emails...")
+            params = {"n": n, "skip_classified": "true"}
             if page_token:
                 params["page_token"] = page_token
             endpoint = "emails/stream-preview" if preview else "emails/stream"
@@ -53,7 +53,7 @@ def _interactive_classify(args, preview=False):
             batch = data.get("messages", [])
             page_token = data.get("next_page_token")
             if not batch:
-                print("No more messages.")
+                click.echo("No more messages.")
                 return
 
         msg = batch.pop(0)
@@ -108,14 +108,14 @@ def _interactive_classify(args, preview=False):
         for i in range(total_lines):
             left = left_lines[i] if i < len(left_lines) else ""
             right = right_lines[i] if i < len(right_lines) else ""
-            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
+            click.echo(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
 
         while True:
             resp = prompt("> ", completer=completer).strip()
             if not resp or resp.lower() in {"n", "next", "skip", "s"}:
                 break
             if resp.lower() in {"q", "quit", "e", "end", "x", "exit", "c", "close", "a", "abort"}:
-                print("Quitting.")
+                click.echo("Quitting.")
                 return
             # Immediate delete or move command takes precedence over categorization
             lresp = resp.lower()
@@ -128,13 +128,13 @@ def _interactive_classify(args, preview=False):
                     json={"id": msg["id"], "label": label},
                 )
                 if rmove.status_code != 200:
-                    print(colored(f"Unknown label: {label}", "yellow"))
+                    click.echo(colored(f"Unknown label: {label}", "yellow"))
                 else:
-                    print(f"Moved to {label}.")
+                    click.echo(f"Moved to {label}.")
                 break
             if lresp == "delete":
                 requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
-                print("Deleted.")
+                click.echo("Deleted.")
                 break
             # Check for delete or move suffix after categorization
             delete = False
@@ -160,7 +160,7 @@ def _interactive_classify(args, preview=False):
                     category_set.add(category.lower())
                     completer = WordCompleter(categories, ignore_case=True)
                 else:
-                    print(
+                    click.echo(
                         colored(
                             "Unknown category. To force-add a category, type a ! followed by a space, and then the category.",
                             "yellow",
@@ -178,9 +178,9 @@ def _interactive_classify(args, preview=False):
             }
             requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
             if delete:
-                print(f"Categorized as {category} and deleted.")
+                click.echo(f"Categorized as {category} and deleted.")
             else:
-                print(f"Categorized as {category}.")
+                click.echo(f"Categorized as {category}.")
             # perform move if requested after categorization
             if move_label:
                 rmove = requests.post(
@@ -188,312 +188,81 @@ def _interactive_classify(args, preview=False):
                     json={"id": msg["id"], "label": move_label},
                 )
                 if rmove.status_code != 200:
-                    print(colored(f"Unknown label: {move_label}", "yellow"))
+                    click.echo(colored(f"Unknown label: {move_label}", "yellow"))
                     continue
                 else:
-                    print(f"Moved to {move_label}.")
+                    click.echo(f"Moved to {move_label}.")
             break
 
 
-def cmd_login(args):
+@click.group()
+def cli():
+    """Inbox Tool CLI"""
+    pass
+
+
+@cli.command()
+def login():
+    """Begin OAuth flow; prints a URL"""
     r = requests.get(f"{BASE_URL}/auth/login")
     r.raise_for_status()
     url = r.json()["authorization_url"]
-    print("\nPaste this URL into your browser to sign in:")
-    print(url)
+    click.echo("\nPaste this URL into your browser to sign in:")
+    click.echo(url)
     try:
         webbrowser.open(url)
     except Exception:
         pass
-    print("\nAfter completing the flow, run `python cli.py me` or `recent-emails`.\n")
+    click.echo("\nAfter completing the flow, run `python cli.py me` or `recent-emails`.\n")
 
 
-def cmd_logout(args):
+@cli.command()
+def logout():
+    """Revoke and delete tokens"""
     r = requests.post(f"{BASE_URL}/auth/logout")
-    print(r.status_code, r.json())
+    click.echo(f"{r.status_code} {r.json()}")
 
 
-def cmd_me(args):
+@cli.command()
+def me():
+    """Show profile info; also refreshes token if expired"""
     r = requests.get(f"{BASE_URL}/me")
-    print(r.status_code, r.json())
+    click.echo(f"{r.status_code} {r.json()}")
 
 
-def cmd_recent_emails(args):
-    r = requests.get(f"{BASE_URL}/emails/recent", params={"n": args.n})
+@cli.command("recent-emails")
+@click.option("-n", default=20, help="Number of emails to fetch")
+def recent_emails(n):
+    """List recent emails (sender, subject, snippet)"""
+    r = requests.get(f"{BASE_URL}/emails/recent", params={"n": n})
     r.raise_for_status()
     data = r.json()
     for i, m in enumerate(data.get("messages", []), 1):
-        print(f"{i:2d}. {m.get('from')} | {m.get('subject')}\n    {m.get('snippet')}\n")
+        click.echo(f"{i:2d}. {m.get('from')} | {m.get('subject')}\n    {m.get('snippet')}\n")
 
 
-def cmd_classify(args):
-    page_token = None
-    batch = []
-    r = requests.get(f"{BASE_URL}/categories")
-    r.raise_for_status()
-    categories = r.json().get("categories", [])
-    category_set = set(c.lower() for c in categories)
-    completer = WordCompleter(categories, ignore_case=True)
-    while True:
-        if not batch:
-            print("Loading more emails...")
-            params = {"n": args.n, "skip_classified": "true"}
-            if page_token:
-                params["page_token"] = page_token
-            r = requests.get(f"{BASE_URL}/emails/stream", params=params)
-            r.raise_for_status()
-            data = r.json()
-            batch = data.get("messages", [])
-            page_token = data.get("next_page_token")
-            if not batch:
-                print("No more messages.")
-                return
-
-        msg = batch.pop(0)
-
-        os.system("cls" if os.name == "nt" and not is_running_in_git_bash() else "clear")
-
-        # Get terminal dimensions
-        cols, rows = shutil.get_terminal_size((80, 20))
-        max_lines = int(rows * 0.8)
-
-        # Prepare header lines with proper wrapping
-        from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
-        subject_line = "Subject: " + str(msg.get("subject"))
-        date_line = "Date: " + str(msg.get("date"))
-        thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
-
-        # Layout email content and categories side by side
-        left_width = int(cols * 0.75)
-        right_width = cols - left_width - 1
-
-        # Prepare left pane with header and content
-        left_lines = []
-        left_lines.extend(textwrap.wrap(date_line, width=left_width))
-        left_lines.extend(textwrap.wrap(from_line, width=left_width))
-        left_lines.extend(textwrap.wrap(subject_line, width=left_width))
-        left_lines.extend(textwrap.wrap(thread_line, width=left_width))
-
-        available_lines = max_lines - len(left_lines)
-        content = msg.get("content", "") or ""
-        content_lines = content.splitlines()
-        for content_line in content_lines:
-            if available_lines <= 0:
-                break
-            if not content_line.strip():
-                left_lines.append("")
-                available_lines -= 1
-            else:
-                wrapped_content = textwrap.wrap(content_line, width=left_width)
-                if not wrapped_content:
-                    wrapped_content = [""]
-                if len(wrapped_content) <= available_lines:
-                    left_lines.extend(wrapped_content)
-                    available_lines -= len(wrapped_content)
-                else:
-                    left_lines.extend(wrapped_content[:available_lines])
-                    available_lines = 0
-                    break
-
-        # Prepare right pane with categories
-        right_lines = []
-        for cat in categories:
-            if len(cat) <= right_width:
-                right_lines.append(cat)
-            else:
-                right_lines.extend(textwrap.wrap(cat, width=right_width))
-
-        total_lines = min(max(len(left_lines), len(right_lines)), max_lines)
-        for i in range(total_lines):
-            left = left_lines[i] if i < len(left_lines) else ""
-            right = right_lines[i] if i < len(right_lines) else ""
-            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
-
-        while True:
-            resp = prompt("> ", completer=completer).strip()
-            if not resp or resp.lower() in {"n", "next", "skip", "s"}:
-                break
-            if resp.lower() in {"q", "quit"}:
-                print("Quitting.")
-                return
-            if resp.lower() == "delete":
-                requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
-                print("Deleted.")
-                break
-            delete = False
-            if resp.endswith(" DELETE"):
-                delete = True
-                resp = resp[:-7].strip()
-            category = resp
-            if not category:
-                continue
-            if category.lower() not in category_set:
-                if category.startswith("! "):
-                    category = category[2:].strip()
-                    if not category:
-                        continue
-                    categories.append(category)
-                    category_set.add(category.lower())
-                    completer = WordCompleter(categories, ignore_case=True)
-                else:
-                    print(colored("Unknown category. To force-add a category, type a ! followed by a space, and then the category.", "yellow"))
-                    continue
-            payload = {
-                "id": msg["id"],
-                "subject": msg.get("subject"),
-                "sender_name": msg.get("sender_name"),
-                "sender_email": msg.get("sender_email"),
-                "content": msg.get("content"),
-                "category": category,
-                "delete": delete,
-            }
-            requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
-            if delete:
-                print(f"Categorized as {category} and deleted.")
-            else:
-                print(f"Categorized as {category}.")
-            break
+@cli.command()
+@click.option("-n", default=25, help="Number of emails to process per batch")
+def classify(n):
+    """Interactive email classifier"""
+    _interactive_classify(n, preview=False)
 
 
-def cmd_classify_preview(args):
-    page_token = None
-    batch = []
-    r = requests.get(f"{BASE_URL}/categories")
-    r.raise_for_status()
-    categories = r.json().get("categories", [])
-    category_set = set(c.lower() for c in categories)
-    completer = WordCompleter(categories, ignore_case=True)
-    while True:
-        if not batch:
-            print("Loading more emails...")
-            params = {"n": args.n, "skip_classified": "true"}
-            if page_token:
-                params["page_token"] = page_token
-            r = requests.get(f"{BASE_URL}/emails/stream-preview", params=params)
-            r.raise_for_status()
-            data = r.json()
-            batch = data.get("messages", [])
-            page_token = data.get("next_page_token")
-            if not batch:
-                print("No more messages.")
-                return
+@cli.command("classify-preview")
+@click.option("-n", default=25, help="Number of emails to process per batch")
+def classify_preview(n):
+    """Interactive classifier using Gmail previews"""
+    _interactive_classify(n, preview=True)
 
-        msg = batch.pop(0)
 
-        os.system("cls" if os.name == "nt" and not is_running_in_git_bash() else "clear")
-
-        cols, rows = shutil.get_terminal_size((80, 20))
-        max_lines = int(rows * 0.8)
-
-        from_line = "From: {} <{}>".format(msg.get("sender_name"), msg.get("sender_email"))
-        subject_line = "Subject: " + str(msg.get("subject"))
-        date_line = "Date: " + str(msg.get("date"))
-        thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
-
-        # Layout email content and categories side by side
-        left_width = int(cols * 0.75)
-        right_width = cols - left_width - 1
-
-        # Prepare left pane with header and content
-        left_lines = []
-        left_lines.extend(textwrap.wrap(date_line, width=left_width))
-        left_lines.extend(textwrap.wrap(from_line, width=left_width))
-        left_lines.extend(textwrap.wrap(subject_line, width=left_width))
-        left_lines.extend(textwrap.wrap(thread_line, width=left_width))
-
-        available_lines = max_lines - len(left_lines)
-        content = msg.get("content", "") or ""
-        content_lines = content.splitlines()
-        for content_line in content_lines:
-            if available_lines <= 0:
-                break
-            if not content_line.strip():
-                left_lines.append("")
-                available_lines -= 1
-            else:
-                wrapped_content = textwrap.wrap(content_line, width=left_width)
-                if not wrapped_content:
-                    wrapped_content = [""]
-                if len(wrapped_content) <= available_lines:
-                    left_lines.extend(wrapped_content)
-                    available_lines -= len(wrapped_content)
-                else:
-                    left_lines.extend(wrapped_content[:available_lines])
-                    available_lines = 0
-                    break
-
-        # Prepare right pane with categories
-        right_lines = []
-        for cat in categories:
-            if len(cat) <= right_width:
-                right_lines.append(cat)
-            else:
-                right_lines.extend(textwrap.wrap(cat, width=right_width))
-
-        total_lines = min(max(len(left_lines), len(right_lines)), max_lines)
-        for i in range(total_lines):
-            left = left_lines[i] if i < len(left_lines) else ""
-            right = right_lines[i] if i < len(right_lines) else ""
-            print(_pad_right(left, left_width) + ' ' + _pad_right(right, right_width))
-
-        while True:
-            resp = prompt("> ", completer=completer).strip()
-            if not resp or resp.lower() in {"n", "next", "skip", "s"}:
-                break
-            if resp.lower() in {"q", "quit"}:
-                print("Quitting.")
-                return
-            if resp.lower() == "delete":
-                requests.post(f"{BASE_URL}/emails/delete", json={"id": msg["id"]}).raise_for_status()
-                print("Deleted.")
-                break
-            delete = False
-            if resp.endswith(" DELETE"):
-                delete = True
-                resp = resp[:-7].strip()
-            category = resp
-            if not category:
-                continue
-            if category.lower() not in category_set:
-                if category.startswith("! "):
-                    category = category[2:].strip()
-                    if not category:
-                        continue
-                    categories.append(category)
-                    category_set.add(category.lower())
-                    completer = WordCompleter(categories, ignore_case=True)
-                else:
-                    print(
-                        colored(
-                            "Unknown category. To force-add a category, type a ! followed by a space, and then the category.",
-                            "yellow",
-                        )
-                    )
-                    continue
-            payload = {
-                "id": msg["id"],
-                "subject": msg.get("subject"),
-                "sender_name": msg.get("sender_name"),
-                "sender_email": msg.get("sender_email"),
-                "content": msg.get("content"),
-                "category": category,
-                "delete": delete,
-            }
-            requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
-            if delete:
-                print(f"Categorized as {category} and deleted.")
-            else:
-                print(f"Categorized as {category}.")
-            break
-
-def cmd_classify(args):
-    _interactive_classify(args, preview=False)
-
-def cmd_classify_preview(args):
-    _interactive_classify(args, preview=True)
-
-def cmd_classify_auto(args):
-    with open(args.rules) as f:
+@cli.command("classify-auto")
+@click.argument("rules", type=click.Path(exists=True))
+@click.option("-n", default=25, help="Number of emails to process per batch")
+@click.option("--use-before-date", is_flag=True, 
+              help="Enable before-date optimization when skipping classified emails")
+def classify_auto(rules, n, use_before_date):
+    """Automatically classify emails using regex rules"""
+    with open(rules) as f:
         rule_data = json.load(f)
 
     compiled_rules = []
@@ -522,11 +291,11 @@ def cmd_classify_auto(args):
     try:
         while True:
             if not batch:
-                print("Loading more emails...")
+                click.echo("Loading more emails...")
                 params = {
-                    "n": args.n,
+                    "n": n,
                     "skip_classified": "true",
-                    "use_before": "true" if args.use_before_date else "false",
+                    "use_before": "true" if use_before_date else "false",
                 }
                 if page_token:
                     params["page_token"] = page_token
@@ -536,7 +305,7 @@ def cmd_classify_auto(args):
                 batch = data.get("messages", [])
                 page_token = data.get("next_page_token")
                 if not batch:
-                    print("No more messages.")
+                    click.echo("No more messages.")
                     return
 
             msg = batch.pop(0)
@@ -555,104 +324,40 @@ def cmd_classify_auto(args):
                     }
                     requests.post(f"{BASE_URL}/emails/classify", json=payload).raise_for_status()
                     if rule["delete"]:
-                        print(
+                        click.echo(
                             f"Categorized as {rule['category']} and deleted: {msg.get('subject')}"
                         )
                     else:
-                        print(
+                        click.echo(
                             f"Categorized as {rule['category']}: {msg.get('subject')}"
                         )
                     matched = True
                     break
             if not matched:
-                print(f"No rule matched: {msg.get('subject')}")
+                click.echo(f"No rule matched: {msg.get('subject')}")
     except KeyboardInterrupt:
-        print("Stopping automatic classification.")
+        click.echo("Stopping automatic classification.")
 
 
-
-def cmd_experiment_classify_marketing_newsletter_other(args):
-    params = {"n": args.n}
-    r = requests.get(f"{BASE_URL}/emails/experiment-classify-marketing-newsletter-other", params=params, stream=True)
-    r.raise_for_status()
-    for line in r.iter_lines(decode_unicode=True):
-        if line:
-            print(line)
-
-
-def cmd_declutter(args):
-    params = {"n": args.n, "classes": args.classes}
+@cli.command()
+@click.option("-n", default=25, help="Number of emails to process per batch")
+@click.option("-c", "--classes", multiple=True, 
+              default=["MARKETING", "NEWSLETTER", "NOTIFICATION"],
+              help="List of classes to treat as clutter")
+@click.option("--dry-run", is_flag=True, 
+              help="Dry run: show which emails would be deleted without actually deleting them")
+def declutter(n, classes, dry_run):
+    """Preview and delete clutter emails (marketing/newsletter/etc.); use --dry-run to preview only"""
+    params = {"n": n, "classes": list(classes)}
+    if dry_run:
+        params["dry_run"] = "true"
+        click.echo("Dry run mode: no messages will be deleted.")
     r = requests.get(f"{BASE_URL}/emails/declutter", params=params, stream=True)
     r.raise_for_status()
     for line in r.iter_lines(decode_unicode=True):
         if line:
-            print(line)
+            click.echo(line)
 
-
-def main():
-    p = argparse.ArgumentParser(description="Inbox Tool CLI")
-    sub = p.add_subparsers(dest="cmd")
-
-    sub_login = sub.add_parser("login", help="Begin OAuth flow; prints a URL")
-    sub_login.set_defaults(func=cmd_login)
-
-    sub_logout = sub.add_parser("logout", help="Revoke and delete tokens")
-    sub_logout.set_defaults(func=cmd_logout)
-
-    sub_me = sub.add_parser("me", help="Show profile info; also refreshes token if expired")
-    sub_me.set_defaults(func=cmd_me)
-
-    sub_recent = sub.add_parser("recent-emails", help="List recent emails (sender, subject, snippet)")
-    sub_recent.add_argument("-n", type=int, default=20)
-    sub_recent.set_defaults(func=cmd_recent_emails)
-
-    sub_classify = sub.add_parser("classify", help="Interactive email classifier")
-    sub_classify.add_argument("-n", type=int, default=25)
-    sub_classify.set_defaults(func=cmd_classify)
-
-    sub_classify_preview = sub.add_parser(
-        "classify-preview", help="Interactive classifier using Gmail previews"
-    )
-    sub_classify_preview.add_argument("-n", type=int, default=25)
-    sub_classify_preview.set_defaults(func=cmd_classify_preview)
-
-    sub_classify_auto = sub.add_parser(
-        "classify-auto", help="Automatically classify emails using regex rules"
-    )
-    sub_classify_auto.add_argument("rules", help="Path to rules JSON file")
-    sub_classify_auto.add_argument("-n", type=int, default=25)
-    sub_classify_auto.add_argument(
-        "--use-before-date",
-        action="store_true",
-        help="Enable before-date optimization when skipping classified emails",
-    )
-    sub_classify_auto.set_defaults(func=cmd_classify_auto)
-
-    sub_exp = sub.add_parser(
-        "experiment-classify-marketing-newsletter-other",
-        help="Dry-run classification via SetFit marketing/newsletter/other"
-    )
-    sub_exp.add_argument("-n", type=int, default=25)
-    sub_exp.set_defaults(func=cmd_experiment_classify_marketing_newsletter_other)
-
-    sub_del = sub.add_parser(
-        "declutter",
-        help="Preview and delete clutter emails (marketing/newsletter/etc.)"
-    )
-    sub_del.add_argument("-n", type=int, default=25, help="Number of emails to process per batch")
-    sub_del.add_argument(
-        "-c", "--classes",
-        nargs="+",
-        default=["MARKETING", "NEWSLETTER", "NOTIFICATION"],
-        help="List of classes to treat as clutter"
-    )
-    sub_del.set_defaults(func=cmd_declutter)
-
-    args = p.parse_args()
-    if not hasattr(args, "func"):
-        p.print_help()
-        return
-    args.func(args)
 
 if __name__ == "__main__":
-    main()
+    cli()

@@ -19,3 +19,4 @@ openai
 termcolor
 prompt_toolkit
 flask
+click

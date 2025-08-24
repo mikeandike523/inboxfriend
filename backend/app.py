@@ -373,13 +373,14 @@ def emails_experiment_classify_marketing_newsletter_other():
 
 @app.get("/emails/declutter")
 def emails_declutter():
-    """Preview and delete clutter emails based on specified classes."""
+    """Preview and delete clutter emails based on specified classes. Supports dry-run mode (no deletions)."""
     model_server_url = app.config["MODEL_SERVER_URL"]
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
     n = int(request.args.get("n", 25))
     classes = request.args.getlist("classes") or ["MARKETING", "NEWSLETTER", "NOTIFICATION"]
+    dry_run = request.args.get("dry_run", "false").lower() == "true"
     stream = GmailPreviewMessageStream(gmail, batch_size=n)
     stream._next_page_token = request.args.get("page_token")
 
@@ -389,20 +390,24 @@ def emails_declutter():
             if not batch:
                 break
             # Classify batch via external model service
-            texts = [f"{m.get('subject') or ''} {m.get('snippet') or ''}".strip() for m in batch]
+            texts = [f"Subject: {m.get('subject') or ''}\nBody:\n{m.get('snippet') or ''}".strip() for m in batch]
             resp = requests.post(f"{model_server_url}/predict", json={"texts": texts}, timeout=30)
             resp.raise_for_status()
             result = resp.json()
             preds = result.get("predictions", [])
             probas = result.get("probabilities") or [None] * len(preds)
+            upper_classes = set(c.upper() for c in classes)
             for m, pred, proba in zip(batch, preds, probas):
                 conf = float(max(proba)) if proba is not None else None
                 subject = m.get("subject") or ""
                 snippet = m.get("snippet") or ""
                 # Delete only specified classes with sufficient confidence
-                if conf is not None and conf >= 0.95 and pred in classes:
-                    gmail.users().messages().delete(userId="me", id=m["id"]).execute()
-                    yield f"Deleted ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
+                if conf is not None and conf >= 0.95 and pred.upper() in upper_classes:
+                    if dry_run:
+                        yield f"Would delete ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
+                    else:
+                        gmail.users().messages().delete(userId="me", id=m["id"]).execute()
+                        yield f"Deleted ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
                 else:
                     label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
                     if conf is not None:
