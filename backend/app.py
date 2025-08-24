@@ -423,26 +423,35 @@ def emails_declutter():
             resp = requests.post(f"{model_server_url}/predict", json={"texts": texts}, timeout=30)
             resp.raise_for_status()
             result = resp.json()
-            preds = [_map_pred(p) for p in result.get("predictions", [])]
-            probas = result.get("probabilities") or [None] * len(preds)
+            probas_list = result.get("probabilities") or []
             classes_set = set(classes)
-            for m, pred, proba in zip(batch, preds, probas):
-                conf = float(max(proba)) if proba is not None else None
+            for m, proba in zip(batch, probas_list):
                 subject = m.get("subject") or ""
                 snippet = m.get("snippet") or ""
-                # Delete only specified classes with sufficient confidence
-                if conf is not None and conf >= 0.95 and pred in classes_set:
-                    if dry_run:
-                        yield f"Would delete ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
-                    else:
-                        gmail.users().messages().delete(userId="me", id=m["id"]).execute()
-                        yield f"Deleted ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
-                else:
+                if proba is not None:
+                    # flag deletion if any category probability exceeds threshold and is in target classes
+                    high = [i for i, p in enumerate(proba) if p >= 0.95]
+                    high_labels = { _ID2LABEL.get(i, str(i)).lower() for i in high }
+                    intersect = high_labels & classes_set
+                    if intersect:
+                        # choose highest confidence among matching labels
+                        conf_vals = [proba[i] for i in high if _ID2LABEL.get(i, str(i)).lower() in intersect]
+                        max_conf = max(conf_vals)
+                        label_desc = ", ".join(intersect)
+                        if dry_run:
+                            yield f"Would delete ({label_desc}, {max_conf:.2f}) | {subject}\n    {snippet}\n"
+                        else:
+                            gmail.users().messages().delete(userId="me", id=m["id"]).execute()
+                            yield f"Deleted ({label_desc}, {max_conf:.2f}) | {subject}\n    {snippet}\n"
+                        continue
+                    # no deletion: show top prediction
+                    top_idx = max(range(len(proba)), key=lambda i: proba[i])
+                    pred = _map_pred(top_idx)
+                    conf = proba[top_idx]
                     label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
-                    if conf is not None:
-                        yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
-                    else:
-                        yield f"{label} | {subject}\n    {snippet}\n"
+                    yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
+                else:
+                    yield f"UNKNOWN | {subject}\n    {snippet}\n"
 
     return Response(generate(), mimetype="text/plain")
 

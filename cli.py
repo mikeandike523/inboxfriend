@@ -371,22 +371,23 @@ def classify_auto(rules, n, use_before_date):
 
 
 @cli.command()
+@click.argument("classes", nargs=-1)
 @click.option("--list", "list_classes", is_flag=True,
               help="List available clutter classes and exit")
 @click.option("--before-this-year", "before_this_year", is_flag=True,
               help="Only process emails from before the current year")
 @click.option("-n", default=25, help="Number of emails to process per batch")
-@click.option("-c", "--classes", multiple=True,
-              default=["marketing", "newsletter", "notification"],
-              help="List of classes to treat as clutter (lowercase)")
 @click.option("--dry-run", is_flag=True,
               help="Dry run: show which emails would be deleted without actually deleting them")
 def declutter(n, classes, dry_run, list_classes, before_this_year):
     """Preview and delete clutter emails (marketing/newsletter/etc.); use --dry-run to preview only"""
+    default_classes = ("marketing", "newsletter", "notification")
     if list_classes:
-        for cls in classes:
+        to_list = classes or default_classes
+        for cls in to_list:
             click.echo(cls)
         return
+    classes = classes or default_classes
     params = {"n": n, "classes": list(classes)}
     if dry_run:
         params["dry_run"] = "true"

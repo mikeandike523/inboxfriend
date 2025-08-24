@@ -32,7 +32,7 @@ def setup_gpu_acceleration():
 device = setup_gpu_acceleration()
 
 # Directory where the trained SetFit model is saved
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "backend", "setfit_clutter")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "backend", "setfit_email_category")
 
 # Load model at module level and move to GPU
 app.logger.info(f"Loading SetFit model from {MODEL_DIR}")
@@ -62,6 +62,9 @@ def predict():
     result = {"predictions": preds}
     if probabilities is not None:
         result["probabilities"] = probabilities
+
+    print(result)
+
     return jsonify(result)
 
 
