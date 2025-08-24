@@ -19,6 +19,28 @@ from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 
 from gmail_stream import GmailMessageStream, GmailPreviewMessageStream
+import json
+from pathlib import Path
+
+# Load label metadata for SetFit model to map prediction indices to labels and provide categories
+_model_dir = Path(__file__).parent / "setfit_email_category"
+_label_metadata_path = _model_dir / "label_metadata.json"
+try:
+    with open(_label_metadata_path, 'r') as _f:
+        _label_metadata = json.load(_f)
+    _ID2LABEL = {int(k): v for k, v in _label_metadata.get("id2label", {}).items()}
+    _MODEL_CATEGORIES = _label_metadata.get("categories", [])
+except Exception:
+    _ID2LABEL = {}
+    _MODEL_CATEGORIES = []
+
+def _map_pred(pred):
+    """Map a raw prediction (int or digit string) to its label string via metadata."""
+    if isinstance(pred, int):
+        return _ID2LABEL.get(pred, str(pred))
+    if isinstance(pred, str) and pred.isdigit():
+        return _ID2LABEL.get(int(pred), pred)
+    return pred
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -356,7 +378,7 @@ def emails_experiment_classify_marketing_newsletter_other():
             )
             resp.raise_for_status()
             result = resp.json()
-            preds = result.get("predictions", [])
+            preds = [_map_pred(p) for p in result.get("predictions", [])]
             probas = result.get("probabilities") or [None] * len(preds)
             for m, pred, proba in zip(batch, preds, probas):
                 conf = float(max(proba)) if proba is not None else None
@@ -401,7 +423,7 @@ def emails_declutter():
             resp = requests.post(f"{model_server_url}/predict", json={"texts": texts}, timeout=30)
             resp.raise_for_status()
             result = resp.json()
-            preds = result.get("predictions", [])
+            preds = [_map_pred(p) for p in result.get("predictions", [])]
             probas = result.get("probabilities") or [None] * len(preds)
             classes_set = set(classes)
             for m, pred, proba in zip(batch, preds, probas):
@@ -487,10 +509,14 @@ def emails_stream_preview():
 
 @app.get("/categories")
 def get_categories():
-    with Session(engine) as s:
-        cats = (
-            s.execute(select(Classification.category).distinct()).scalars().all()
-        )
+    """Return available categories: prefer trained model categories if available."""
+    if _MODEL_CATEGORIES:
+        cats = _MODEL_CATEGORIES
+    else:
+        with Session(engine) as s:
+            cats = (
+                s.execute(select(Classification.category).distinct()).scalars().all()
+            )
     return jsonify({"categories": cats})
 
 

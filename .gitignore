@@ -2,6 +2,6 @@
 .env
 db_data
 personal-rules
-backend/setfit_clutter
+backend/setfit_email_category
 checkpoints
 OPENAI_API_KEY.txt
