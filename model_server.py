@@ -63,8 +63,6 @@ def predict():
     if probabilities is not None:
         result["probabilities"] = probabilities
 
-    print(result)
-
     return jsonify(result)
 
 
