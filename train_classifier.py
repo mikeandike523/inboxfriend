@@ -11,7 +11,7 @@ import os
 import shutil
 from collections import Counter
 import json
-import datetime
+from datetime import datetime
 
 # --- Option B deps ---
 # pip install setfit "sentence-transformers<3" datasets scikit-learn accelerate
