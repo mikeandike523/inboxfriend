@@ -372,7 +372,7 @@ def classify_auto(rules, n, use_before_date):
 
 @cli.command()
 @click.argument("classes", nargs=-1)
-@click.option("--list", "list_classes", is_flag=True,
+@click.option("--list", "--list-available-classes", "list_classes", is_flag=True,
               help="List available clutter classes and exit")
 @click.option("--before-this-year", "before_this_year", is_flag=True,
               help="Only process emails from before the current year")
@@ -383,8 +383,10 @@ def declutter(n, classes, dry_run, list_classes, before_this_year):
     """Preview and delete clutter emails (marketing/newsletter/etc.); use --dry-run to preview only"""
     default_classes = ("marketing", "newsletter", "notification")
     if list_classes:
-        to_list = classes or default_classes
-        for cls in to_list:
+        # fetch available classes from backend
+        resp = requests.get(f"{BASE_URL}/categories")
+        resp.raise_for_status()
+        for cls in resp.json().get("categories", []):
             click.echo(cls)
         return
     classes = classes or default_classes
