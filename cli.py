@@ -91,45 +91,51 @@ def cmd_classify(args):
         date_line = "Date: " + str(msg.get("date"))
         thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
 
-        # Wrap header lines to terminal width
-        wrapped_lines = []
-        wrapped_lines.extend(textwrap.wrap(date_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(from_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(subject_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(thread_line, width=cols))
+        # Layout email content and categories side by side
+        left_width = int(cols * 0.75)
+        right_width = cols - left_width - 1
 
-        # Calculate remaining lines for content
-        available_lines = max_lines - len(wrapped_lines)
+        # Prepare left pane with header and content
+        left_lines = []
+        left_lines.extend(textwrap.wrap(date_line, width=left_width))
+        left_lines.extend(textwrap.wrap(from_line, width=left_width))
+        left_lines.extend(textwrap.wrap(subject_line, width=left_width))
+        left_lines.extend(textwrap.wrap(thread_line, width=left_width))
 
-        # Process content lines with wrapping
+        available_lines = max_lines - len(left_lines)
         content = msg.get("content", "") or ""
         content_lines = content.splitlines()
-
         for content_line in content_lines:
             if available_lines <= 0:
                 break
-
             if not content_line.strip():
-                # Empty line
-                wrapped_lines.append("")
+                left_lines.append("")
                 available_lines -= 1
             else:
-                # Wrap the content line
-                wrapped_content = textwrap.wrap(content_line, width=cols)
+                wrapped_content = textwrap.wrap(content_line, width=left_width)
                 if not wrapped_content:
                     wrapped_content = [""]
-
-                # Check if we have enough space for this wrapped content
                 if len(wrapped_content) <= available_lines:
-                    wrapped_lines.extend(wrapped_content)
+                    left_lines.extend(wrapped_content)
                     available_lines -= len(wrapped_content)
                 else:
-                    # Add as many lines as we can fit
-                    wrapped_lines.extend(wrapped_content[:available_lines])
+                    left_lines.extend(wrapped_content[:available_lines])
                     available_lines = 0
                     break
 
-        print("\n".join(wrapped_lines))
+        # Prepare right pane with categories
+        right_lines = []
+        for cat in categories:
+            if len(cat) <= right_width:
+                right_lines.append(cat)
+            else:
+                right_lines.extend(textwrap.wrap(cat, width=right_width))
+
+        total_lines = min(max(len(left_lines), len(right_lines)), max_lines)
+        for i in range(total_lines):
+            left = left_lines[i] if i < len(left_lines) else ""
+            right = right_lines[i] if i < len(right_lines) else ""
+            print(f"{left.ljust(left_width)} {right}")
 
         while True:
             resp = prompt("> ", completer=completer).strip()
@@ -212,36 +218,51 @@ def cmd_classify_preview(args):
         date_line = "Date: " + str(msg.get("date"))
         thread_line = "Thread: " + ("yes" if msg.get("thread") else "no")
 
-        wrapped_lines = []
-        wrapped_lines.extend(textwrap.wrap(date_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(from_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(subject_line, width=cols))
-        wrapped_lines.extend(textwrap.wrap(thread_line, width=cols))
+        # Layout email content and categories side by side
+        left_width = int(cols * 0.75)
+        right_width = cols - left_width - 1
 
-        available_lines = max_lines - len(wrapped_lines)
+        # Prepare left pane with header and content
+        left_lines = []
+        left_lines.extend(textwrap.wrap(date_line, width=left_width))
+        left_lines.extend(textwrap.wrap(from_line, width=left_width))
+        left_lines.extend(textwrap.wrap(subject_line, width=left_width))
+        left_lines.extend(textwrap.wrap(thread_line, width=left_width))
 
+        available_lines = max_lines - len(left_lines)
         content = msg.get("content", "") or ""
         content_lines = content.splitlines()
-
         for content_line in content_lines:
             if available_lines <= 0:
                 break
             if not content_line.strip():
-                wrapped_lines.append("")
+                left_lines.append("")
                 available_lines -= 1
             else:
-                wrapped_content = textwrap.wrap(content_line, width=cols)
+                wrapped_content = textwrap.wrap(content_line, width=left_width)
                 if not wrapped_content:
                     wrapped_content = [""]
                 if len(wrapped_content) <= available_lines:
-                    wrapped_lines.extend(wrapped_content)
+                    left_lines.extend(wrapped_content)
                     available_lines -= len(wrapped_content)
                 else:
-                    wrapped_lines.extend(wrapped_content[:available_lines])
+                    left_lines.extend(wrapped_content[:available_lines])
                     available_lines = 0
                     break
 
-        print("\n".join(wrapped_lines))
+        # Prepare right pane with categories
+        right_lines = []
+        for cat in categories:
+            if len(cat) <= right_width:
+                right_lines.append(cat)
+            else:
+                right_lines.extend(textwrap.wrap(cat, width=right_width))
+
+        total_lines = min(max(len(left_lines), len(right_lines)), max_lines)
+        for i in range(total_lines):
+            left = left_lines[i] if i < len(left_lines) else ""
+            right = right_lines[i] if i < len(right_lines) else ""
+            print(f"{left.ljust(left_width)} {right}")
 
         while True:
             resp = prompt("> ", completer=completer).strip()
