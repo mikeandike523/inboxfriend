@@ -379,7 +379,7 @@ def emails_declutter():
         creds, user_email = get_current_user_creds(s)
         gmail = build("gmail", "v1", credentials=creds)
     n = int(request.args.get("n", 25))
-    classes = request.args.getlist("classes") or ["MARKETING", "NEWSLETTER", "NOTIFICATION"]
+    classes = [c.lower() for c in request.args.getlist("classes")] or ["marketing", "newsletter", "notification"]
     dry_run = request.args.get("dry_run", "false").lower() == "true"
     before_this_year = request.args.get("before_this_year", "false").lower() == "true"
     # Restrict to messages before the start of the current year if requested
@@ -403,13 +403,13 @@ def emails_declutter():
             result = resp.json()
             preds = result.get("predictions", [])
             probas = result.get("probabilities") or [None] * len(preds)
-            upper_classes = set(c.upper() for c in classes)
+            classes_set = set(classes)
             for m, pred, proba in zip(batch, preds, probas):
                 conf = float(max(proba)) if proba is not None else None
                 subject = m.get("subject") or ""
                 snippet = m.get("snippet") or ""
                 # Delete only specified classes with sufficient confidence
-                if conf is not None and conf >= 0.95 and pred.upper() in upper_classes:
+                if conf is not None and conf >= 0.95 and pred in classes_set:
                     if dry_run:
                         yield f"Would delete ({pred}, {conf:.2f}) | {subject}\n    {snippet}\n"
                     else:
