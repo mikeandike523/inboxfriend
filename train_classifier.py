@@ -39,10 +39,18 @@ from sklearn.metrics import classification_report, f1_score
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.neighbors import NearestNeighbors
 import joblib
+import psutil
+import logging
+import transformers
+
 
 # project-specific
 from backend.models import Message, Classification
 from backend.config import Config
+
+os.environ["TRANSFORMERS_VERBOSITY"] = "info"
+os.environ["SETFIT_VERBOSITY"] = "info"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # --------------------
 # Defaults & constants
@@ -54,6 +62,7 @@ NEAR_DUP_THRESH_DEFAULT = 0.94                    # cosine sim threshold to cons
 CONF_GATE_TAU_DEFAULT = 0.60                      # SetFit confidence gate for lexical backstop
 ENCODER_DEFAULT = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_OUTDIR_DEFAULT = Path(__file__).parent / "backend" / "setfit_email_category"
+
 
 # --------------------
 # Utils: text building
@@ -464,6 +473,67 @@ def save_label_metadata(
     return p
 
 # --------------------
+# Memory monitoring
+# --------------------
+
+
+
+def get_memory_usage():
+    """Get current memory usage statistics."""
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    memory_percent = process.memory_percent()
+    
+    stats = {
+        'rss_mb': memory_info.rss / 1024 / 1024,  # Resident Set Size
+        'vms_mb': memory_info.vms / 1024 / 1024,  # Virtual Memory Size
+        'percent': memory_percent
+    }
+    
+    if torch.cuda.is_available():
+        stats['gpu_allocated_mb'] = torch.cuda.memory_allocated() / 1024 / 1024
+        stats['gpu_reserved_mb'] = torch.cuda.memory_reserved() / 1024 / 1024
+        stats['gpu_max_allocated_mb'] = torch.cuda.max_memory_allocated() / 1024 / 1024
+    
+    return stats
+
+# Add this custom callback class
+class VerboseLoggingCallback:
+    """Custom callback for detailed training logging."""
+    
+    def __init__(self):
+        self.step_count = 0
+        self.epoch_count = 0
+        
+    def on_train_begin(self, logs=None):
+        print("\n🚀 Training initialization complete!")
+        memory = get_memory_usage()
+        print(f"📊 Initial memory: RAM {memory['rss_mb']:.1f}MB ({memory['percent']:.1f}%)")
+        if torch.cuda.is_available():
+            print(f"🔥 GPU memory: {memory['gpu_allocated_mb']:.1f}MB allocated, {memory['gpu_reserved_mb']:.1f}MB reserved")
+    
+    def on_epoch_begin(self, epoch, logs=None):
+        self.epoch_count = epoch
+        print(f"\n📈 Starting epoch {epoch + 1}")
+        memory = get_memory_usage()
+        print(f"📊 Memory at epoch start: RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
+    
+    def on_step_end(self, step, logs=None):
+        self.step_count = step
+        if step % 10 == 0:  # Log every 10 steps
+            memory = get_memory_usage()
+            print(f"⚡ Step {step}: RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
+            if logs:
+                print(f"   Logs: {logs}")
+    
+    def on_epoch_end(self, epoch, logs=None):
+        print(f"✅ Completed epoch {epoch + 1}")
+        memory = get_memory_usage()
+        print(f"📊 Memory at epoch end: RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
+        if logs:
+            print(f"   Epoch metrics: {logs}")
+
+# --------------------
 # Training orchestration
 # --------------------
 
@@ -481,50 +551,85 @@ def train_model(
     do_distance_eval: bool = True,
 ) -> None:
 
-    # fresh outdir
-    if model_dir.exists():
-        shutil.rmtree(model_dir)
-    (model_dir).mkdir(parents=True, exist_ok=True)
+    # Set up detailed logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(model_dir / "training.log")
+        ]
+    )
+    
+    # Enable transformers logging
+    transformers.logging.set_verbosity_info()
+    
 
     # GPU
     device, gpu_gb = setup_gpu_acceleration(accelerate_gb)
+    
+    print(f"🔧 Initial system state:")
+    initial_memory = get_memory_usage()
+    print(f"📊 RAM: {initial_memory['rss_mb']:.1f}MB ({initial_memory['percent']:.1f}%)")
+    if torch.cuda.is_available():
+        print(f"🔥 GPU: {initial_memory['gpu_allocated_mb']:.1f}MB allocated")
 
-    # Data
+    # Data loading with progress
+    print("\n📂 Loading and processing data...")
     texts, y, labels, id2label, label_to_id, groups = load_data(
         engine, min_samples=min_samples, equivalency_map=equivalency_map
     )
 
     # Split (leakage-safe)
+    print("\n✂️ Splitting data...")
     X_train, X_val, y_train, y_val, _, _ = grouped_split(texts, y, groups, test_size, seed)
+    print(f"📊 Train: {len(X_train)} samples, Val: {len(X_val)} samples")
 
     # TF-IDF + LR baseline
+    print("\n🔤 Training TF-IDF baseline...")
     tfidf, lr = train_tfidf_lr(X_train, y_train)
     Xva_tfidf = tfidf.transform(X_val)
 
-    # Resampling (avoid 'other' dominance)
+    # Resampling
+    print("\n⚖️ Resampling training data...")
     X_train_bal, y_train_bal = resample_train(X_train, y_train, id2label)
+    print(f"📊 Balanced train: {len(X_train_bal)} samples")
 
     # HF datasets
+    print("\n📦 Creating datasets...")
     train_ds = Dataset.from_dict({"text": X_train_bal, "label": y_train_bal})
     val_ds   = Dataset.from_dict({"text": X_val,        "label": y_val})
 
-    # SetFit
+    # SetFit model initialization
+    print(f"\n🤖 Initializing SetFit model with encoder: {encoder_name}")
     sf_model = build_setfit(labels, encoder_name=encoder_name)
+    
+    memory_after_model = get_memory_usage()
+    print(f"📊 Memory after model init: RAM {memory_after_model['rss_mb']:.1f}MB, GPU {memory_after_model.get('gpu_allocated_mb', 0):.1f}MB")
+
     bs_embed, bs_head = pick_batch_sizes(device, encoder_name, gpu_gb)
+    
+    # Enhanced training arguments with more logging
     args = TrainingArguments(
         batch_size=(bs_embed, bs_head),
-        num_epochs=(2, 16),            # brief encoder tuning, longer head training
-        num_iterations=28,             # more contrastive pairs
+        num_epochs=(2, 16),
+        num_iterations=28,
         use_amp=(device.type == "cuda"),
         warmup_proportion=0.1,
-        sampling_strategy="none",      # we already resampled; if invalid in your SetFit, remove this line
-        end_to_end=False,              # classic SetFit: contrastive + linear head
+        sampling_strategy="none",
+        end_to_end=False,
         seed=seed,
         evaluation_strategy="epoch",
         logging_strategy="steps",
-        logging_steps=50,
+        logging_steps=5,  # Log more frequently
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="accuracy",
+        greater_is_better=True,
+        report_to=None,  # Disable wandb/tensorboard if not needed
     )
 
+    # Create trainer with custom callback
     trainer = Trainer(
         model=sf_model,
         args=args,
@@ -532,16 +637,34 @@ def train_model(
         eval_dataset=val_ds,
         column_mapping={"text": "text", "label": "label"},
     )
+    
+    # Add custom callback for detailed logging
+    callback = VerboseLoggingCallback()
+    trainer.add_callback(callback)
 
-    print(f"\nStarting SetFit training on {device}...")
-    print(f"Embedding/Head batch sizes: {bs_embed}/{bs_head}")
+    print(f"\n🚀 Starting SetFit training on {device}...")
+    print(f"⚙️ Embedding batch size: {bs_embed}, Head batch size: {bs_head}")
+    print(f"📊 Training samples: {len(X_train_bal)}, Validation samples: {len(X_val)}")
+    print(f"🏷️ Number of classes: {len(labels)}")
+    
     if device.type == "cuda":
         torch.cuda.empty_cache()
+        print("🧹 Cleared CUDA cache")
+        
+    # Monitor training start
+    training_start_memory = get_memory_usage()
+    print(f"📊 Pre-training memory: RAM {training_start_memory['rss_mb']:.1f}MB, GPU {training_start_memory.get('gpu_allocated_mb', 0):.1f}MB")
 
-    trainer.train()
-    print("\nEvaluating SetFit on validation split...")
-    sf_metrics = trainer.evaluate()
-    print("SetFit eval metrics:", sf_metrics)
+    # Start training with progress monitoring
+    try:
+        trainer.train()
+        print("\n✅ Training completed successfully!")
+    except Exception as e:
+        print(f"\n❌ Training failed: {e}")
+        raise
+    finally:
+        final_memory = get_memory_usage()
+        print(f"📊 Final memory: RAM {final_memory['rss_mb']:.1f}MB, GPU {final_memory.get('gpu_allocated_mb', 0):.1f}MB")
 
     # Predictions
     y_val_str = [id2label[i] for i in y_val]
@@ -620,10 +743,20 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 def main() -> None:
-    # optional clean of legacy dirs
-    for d in ["checkpoints", "backend/setfit_email_category"]:
-        if os.path.isdir(d):
-            shutil.rmtree(d)
+
+
+    if os.path.isdir("checkpoints"):
+        shutil.rmtree("checkpoints")
+
+    if os.path.isdir(MODEL_OUTDIR_DEFAULT):
+        shutil.rmtree(MODEL_OUTDIR_DEFAULT)
+
+    os.makedirs(MODEL_OUTDIR_DEFAULT, exist_ok=True)
+
+    with open(MODEL_OUTDIR_DEFAULT / "training.log", "w") as f:
+        f.write("")
+
+
 
     args = parse_args()
 
