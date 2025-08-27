@@ -42,6 +42,9 @@ import joblib
 import psutil
 import logging
 import transformers
+import time
+import threading
+import sys
 
 
 # project-specific
@@ -476,8 +479,6 @@ def save_label_metadata(
 # Memory monitoring
 # --------------------
 
-
-
 def get_memory_usage():
     """Get current memory usage statistics."""
     process = psutil.Process()
@@ -504,6 +505,7 @@ class VerboseLoggingCallback:
     def __init__(self):
         self.step_count = 0
         self.epoch_count = 0
+        self.last_log_time = time.time()
         
     def on_train_begin(self, logs=None):
         print("\n🚀 Training initialization complete!")
@@ -511,20 +513,44 @@ class VerboseLoggingCallback:
         print(f"📊 Initial memory: RAM {memory['rss_mb']:.1f}MB ({memory['percent']:.1f}%)")
         if torch.cuda.is_available():
             print(f"🔥 GPU memory: {memory['gpu_allocated_mb']:.1f}MB allocated, {memory['gpu_reserved_mb']:.1f}MB reserved")
+            print(f"🔥 GPU device: {torch.cuda.current_device()}")
+            print(f"🔥 GPU name: {torch.cuda.get_device_name()}")
     
     def on_epoch_begin(self, epoch, logs=None):
         self.epoch_count = epoch
         print(f"\n📈 Starting epoch {epoch + 1}")
         memory = get_memory_usage()
         print(f"📊 Memory at epoch start: RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
+        
+        # Log current time for timeout detection
+        current_time = time.time()
+        if hasattr(self, 'last_log_time'):
+            elapsed = current_time - self.last_log_time
+            print(f"⏱️  Time since last log: {elapsed:.1f}s")
+        self.last_log_time = current_time
+    
+    def on_step_begin(self, step, logs=None):
+        print(f"🔄 Starting step {step}")
+        if torch.cuda.is_available():
+            print(f"🔥 GPU memory at step start: {torch.cuda.memory_allocated() / 1024**2:.1f}MB")
     
     def on_step_end(self, step, logs=None):
         self.step_count = step
-        if step % 10 == 0:  # Log every 10 steps
-            memory = get_memory_usage()
-            print(f"⚡ Step {step}: RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
-            if logs:
-                print(f"   Logs: {logs}")
+        current_time = time.time()
+        elapsed = current_time - self.last_log_time
+        
+        print(f"⚡ Step {step} completed in {elapsed:.1f}s")
+        memory = get_memory_usage()
+        print(f"   RAM {memory['rss_mb']:.1f}MB, GPU {memory.get('gpu_allocated_mb', 0):.1f}MB")
+        
+        if logs:
+            print(f"   Logs: {logs}")
+            
+        self.last_log_time = current_time
+        
+        # Force flush output
+        import sys
+        sys.stdout.flush()
     
     def on_epoch_end(self, epoch, logs=None):
         print(f"✅ Completed epoch {epoch + 1}")
@@ -641,6 +667,20 @@ def train_model(
     # Add custom callback for detailed logging
     callback = VerboseLoggingCallback()
     trainer.add_callback(callback)
+    
+    # Enable maximum verbosity for the trainer
+    trainer.args.logging_steps = 1  # Log every step
+    trainer.args.dataloader_num_workers = 0  # Disable multiprocessing for clearer logs
+    
+    # Print detailed trainer configuration
+    print(f"\n🔧 Trainer configuration:")
+    print(f"   Batch sizes: {args.batch_size}")
+    print(f"   Epochs: {args.num_epochs}")
+    print(f"   Iterations: {args.num_iterations}")
+    print(f"   Device: {device}")
+    print(f"   AMP enabled: {args.use_amp}")
+    print(f"   Sampling strategy: {args.sampling_strategy}")
+    print(f"   End-to-end: {args.end_to_end}")
 
     print(f"\n🚀 Starting SetFit training on {device}...")
     print(f"⚙️ Embedding batch size: {bs_embed}, Head batch size: {bs_head}")
@@ -650,21 +690,88 @@ def train_model(
     if device.type == "cuda":
         torch.cuda.empty_cache()
         print("🧹 Cleared CUDA cache")
-        
+
     # Monitor training start
     training_start_memory = get_memory_usage()
     print(f"📊 Pre-training memory: RAM {training_start_memory['rss_mb']:.1f}MB, GPU {training_start_memory.get('gpu_allocated_mb', 0):.1f}MB")
 
     # Start training with progress monitoring
     try:
+        # Enable maximum verbosity for SetFit and transformers
+        import setfit
+        setfit.logging.set_verbosity_debug()
+        
+        # Enable detailed PyTorch logging
+        torch.autograd.set_detect_anomaly(True)
+        
+        # Add progress monitoring wrapper
+        print("🔍 Starting SetFit training with maximum verbosity...")
+        print(f"📊 Model device: {trainer.model.model_body.device}")
+        print(f"📊 Model head device: {trainer.model.model_head.device if hasattr(trainer.model, 'model_head') else 'N/A'}")
+        
+        # Monitor GPU memory before training
+        if torch.cuda.is_available():
+            print(f"🔥 GPU memory before training:")
+            print(f"   Allocated: {torch.cuda.memory_allocated() / 1024**2:.1f}MB")
+            print(f"   Reserved: {torch.cuda.memory_reserved() / 1024**2:.1f}MB")
+            print(f"   Free: {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**2:.1f}MB")
+        
+        # Enable CUDA launch blocking for better error reporting
+        if torch.cuda.is_available():
+            os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+        
+        # Start training with timeout monitoring
+        import threading
+        
+        training_complete = threading.Event()
+        
+        def monitor_training():
+            start_time = time.time()
+            while not training_complete.is_set():
+                elapsed = time.time() - start_time
+                memory = get_memory_usage()
+                print(f"⏱️  Training running for {elapsed:.1f}s - RAM: {memory['rss_mb']:.1f}MB, GPU: {memory.get('gpu_allocated_mb', 0):.1f}MB")
+                
+                if torch.cuda.is_available():
+                    print(f"🔥 GPU utilization: {torch.cuda.utilization()}%")
+                
+                if training_complete.wait(30):  # Check every 30 seconds
+                    break
+        
+        # Start monitoring thread
+        monitor_thread = threading.Thread(target=monitor_training, daemon=True)
+        monitor_thread.start()
+        
+        # Actually start training
+        print("🔍 Initiating trainer.train() with enhanced logging...")
         trainer.train()
+        training_complete.set()
+        
         print("\n✅ Training completed successfully!")
     except Exception as e:
+        training_complete.set()
         print(f"\n❌ Training failed: {e}")
+        print(f"🔍 Exception type: {type(e).__name__}")
+        import traceback
+        print(f"🔍 Full traceback:")
+        traceback.print_exc()
+        
+        # Additional debugging info
+        if torch.cuda.is_available():
+            print(f"🔥 GPU memory at failure:")
+            print(f"   Allocated: {torch.cuda.memory_allocated() / 1024**2:.1f}MB")
+            print(f"   Reserved: {torch.cuda.memory_reserved() / 1024**2:.1f}MB")
+        
         raise
     finally:
+        training_complete.set()
         final_memory = get_memory_usage()
         print(f"📊 Final memory: RAM {final_memory['rss_mb']:.1f}MB, GPU {final_memory.get('gpu_allocated_mb', 0):.1f}MB")
+        
+        # Clean up
+        if torch.cuda.is_available():
+            os.environ.pop("CUDA_LAUNCH_BLOCKING", None)
+            torch.autograd.set_detect_anomaly(False)
 
     # Predictions
     y_val_str = [id2label[i] for i in y_val]

@@ -20,3 +20,4 @@ termcolor
 prompt_toolkit
 flask
 click
+pynvml
