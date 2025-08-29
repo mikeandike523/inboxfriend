@@ -30,6 +30,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from tqdm import tqdm
 
+# from datasets import Dataset, set_caching_enabled
 from datasets import Dataset
 from setfit import SetFitModel, Trainer, TrainingArguments
 from sentence_transformers import SentenceTransformer
@@ -45,6 +46,8 @@ import transformers
 import time
 import threading
 import sys
+from train_classifier_helpers.encode_to_memmap import encode_to_memmap
+from train_classifier_helpers._embed_to_memmap import _embed_to_memmap
 
 
 # project-specific
@@ -165,35 +168,35 @@ def remove_exact_duplicates(texts: List[str], labels: List[str]) -> Tuple[List[s
         keep_idx.append(i)
     return [texts[i] for i in keep_idx], [labels[i] for i in keep_idx]
 
-def remove_near_duplicates(
-    texts: List[str],
-    labels: List[str],
-    thresh: float,
-    encoder_name: str
-) -> Tuple[List[str], List[str]]:
-    """Remove near-duplicates via cosine similarity on sentence embeddings."""
+def remove_near_duplicates(texts, labels, thresh, encoder_name):
     if len(texts) <= 1:
         return texts, labels
     print(f"\nComputing embeddings for near-duplicate filtering (encoder={encoder_name})...")
     st = SentenceTransformer(encoder_name)
-    embs = st.encode(texts, batch_size=128, convert_to_numpy=True, normalize_embeddings=True, show_progress_bar=True)
-    print(f"Finding near-duplicates (cosine >= {thresh:.2f})...")
-    nn = NearestNeighbors(metric="cosine", algorithm="brute").fit(embs)
+
+    # 384 for MiniLM; adjust if you swap encoders
+    embs_mm = encode_to_memmap(
+        texts, st, out_path=str(MODEL_OUTDIR_DEFAULT / "near_dup_embs.f16.memmap"),
+        d=384, batch_size=32768, sub_batch=128, dtype=np.float16
+    )
+
+    # NearestNeighbors can consume memmap transparently
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(metric="cosine", algorithm="brute").fit(embs_mm.astype(np.float32))
     keep = np.ones(len(texts), dtype=bool)
+
     for i in range(len(texts)):
         if not keep[i]:
             continue
-        dists, idxs = nn.kneighbors(embs[i:i+1], n_neighbors=10, return_distance=True)
+        dists, idxs = nn.kneighbors(embs_mm[i:i+1].astype(np.float32), n_neighbors=10, return_distance=True)
         for d, j in zip(dists[0], idxs[0]):
             if j <= i:
                 continue
-            sim = 1 - d
-            if sim >= thresh:
+            if 1 - d >= thresh:
                 keep[j] = False
-    kept_idx = np.where(keep)[0].tolist()
-    print(f"Kept {len(kept_idx)}/{len(texts)} after near-dup filtering.")
-    return [texts[i] for i in kept_idx], [labels[i] for i in kept_idx]
 
+    kept_idx = np.where(keep)[0].tolist()
+    return [texts[i] for i in kept_idx], [labels[i] for i in kept_idx]
 def load_data(
     engine,
     min_samples: int,
@@ -623,9 +626,20 @@ def train_model(
 
     # HF datasets
     print("\n📦 Creating datasets...")
+    # set_caching_enabled(True)  # HF default, but make explicit
+    os.environ.setdefault("HF_DATASETS_CACHE", str(MODEL_OUTDIR_DEFAULT / "hf_cache"))
+
     train_ds = Dataset.from_dict({"text": X_train_bal, "label": y_train_bal})
     val_ds   = Dataset.from_dict({"text": X_val,        "label": y_val})
 
+    # materialize to disk and reload without keeping tables in RAM
+    cache_dir = MODEL_OUTDIR_DEFAULT / "arrow_ds"
+    train_ds.save_to_disk(str(cache_dir / "train"))
+    val_ds.save_to_disk(str(cache_dir / "val"))
+
+    from datasets import load_from_disk
+    train_ds = load_from_disk(str(cache_dir / "train"), keep_in_memory=False)
+    val_ds   = load_from_disk(str(cache_dir / "val"), keep_in_memory=False)
     # SetFit model initialization
     print(f"\n🤖 Initializing SetFit model with encoder: {encoder_name}")
     sf_model = build_setfit(labels, encoder_name=encoder_name)
