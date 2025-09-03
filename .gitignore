@@ -8,3 +8,5 @@ checkpoints
 OPENAI_API_KEY.txt
 backend/OPENAI_API_KEY.txt
 near_dup_embs.f16.memmap
+__pycache__
+**/__pycache__
