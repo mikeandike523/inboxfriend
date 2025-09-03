@@ -3,6 +3,8 @@
 db_data
 personal-rules
 backend/setfit_email_category
+backend/neighbor_prefetch_email_category
 checkpoints
 OPENAI_API_KEY.txt
 backend/OPENAI_API_KEY.txt
+near_dup_embs.f16.memmap
