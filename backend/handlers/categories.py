@@ -1,10 +1,9 @@
 from flask import request, jsonify
 from sqlalchemy import select
 
-from app import app, Session, engine, _MODEL_CATEGORIES, Classification
+from app import Session, engine, _MODEL_CATEGORIES, Classification
 
 
-@app.get("/categories")
 def get_categories():
     """
     Return available categories.

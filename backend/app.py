@@ -1,46 +1,16 @@
 from __future__ import annotations
-from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
+from datetime import timezone
 
-from flask import Flask, request, jsonify, redirect, make_response, Response
+from flask import Flask
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
-import os
-
-import requests
-from termcolor import colored
 
 from config import Config
-from models import Base, Token, Message, Classification
+from models import Base, Token
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
-from googleapiclient.discovery import build
-
-from gmail_stream import GmailMessageStream, GmailPreviewMessageStream
-import json
-from pathlib import Path
-
-# Load label metadata for SetFit model to map prediction indices to labels and provide categories
-_model_dir = Path(__file__).parent / "setfit_email_category"
-_label_metadata_path = _model_dir / "label_metadata.json"
-try:
-    with open(_label_metadata_path, 'r') as _f:
-        _label_metadata = json.load(_f)
-    _ID2LABEL = {int(k): v for k, v in _label_metadata.get("id2label", {}).items()}
-    _MODEL_CATEGORIES = _label_metadata.get("categories", [])
-except Exception:
-    _ID2LABEL = {}
-    _MODEL_CATEGORIES = []
-
-def _map_pred(pred):
-    """Map a raw prediction (int or digit string) to its label string via metadata."""
-    if isinstance(pred, int):
-        return _ID2LABEL.get(pred, str(pred))
-    if isinstance(pred, str) and pred.isdigit():
-        return _ID2LABEL.get(int(pred), pred)
-    return pred
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -145,7 +115,42 @@ def get_current_user_creds(session: Session) -> tuple[Credentials, str]:
 
     raise ValueError("No valid credentials found. Please run 'login' first.")
 
-import handlers
+def register_handler(route, handler, methods=("GET",)):
+    """Register a view function under `route` with given HTTP methods."""
+    app.add_url_rule(route, endpoint=handler.__name__, view_func=handler, methods=list(methods))
+
+# Explicitly import handlers and register routes
+from handlers.root import root
+from handlers.auth import auth_login, auth_callback, auth_logout
+from handlers.user import me, stats
+from handlers.emails import (
+    emails_recent,
+    emails_stream,
+    emails_experiment_classify_marketing_newsletter_other,
+    emails_declutter,
+    emails_stream_preview,
+    emails_classify,
+    emails_move,
+)
+from handlers.categories import get_categories
+
+register_handler("/", root)
+register_handler("/auth/login", auth_login)
+register_handler("/auth/callback", auth_callback)
+register_handler("/auth/logout", auth_logout, methods=("POST",))
+register_handler("/me", me)
+register_handler("/stats", stats)
+register_handler("/emails/recent", emails_recent)
+register_handler("/emails/stream", emails_stream)
+register_handler(
+    "/emails/experiment-classify-marketing-newsletter-other",
+    emails_experiment_classify_marketing_newsletter_other,
+)
+register_handler("/emails/declutter", emails_declutter)
+register_handler("/emails/stream-preview", emails_stream_preview)
+register_handler("/emails/classify", emails_classify, methods=("POST",))
+register_handler("/emails/move", emails_move, methods=("POST",))
+register_handler("/categories", get_categories)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -5,20 +5,10 @@ from termcolor import colored
 from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 
-from app import (
-    app,
-    Session,
-    engine,
-    get_current_user_creds,
-    _map_pred,
-    _ID2LABEL,
-    Message,
-    Classification,
-)
+from app import Session, engine, get_current_user_creds, _map_pred, _ID2LABEL, Message, Classification
 from gmail_stream import GmailMessageStream, GmailPreviewMessageStream
 
 
-@app.get("/emails/recent")
 def emails_recent():
     n = int(request.args.get("n", 20))
     if n <= 0 or n > 100:
@@ -57,7 +47,6 @@ def emails_recent():
         return jsonify({"count": len(out), "messages": out})
 
 
-@app.get("/emails/stream")
 def emails_stream():
     n = int(request.args.get("n", 25))
     page_token = request.args.get("page_token")
@@ -116,7 +105,6 @@ def emails_stream():
     return jsonify({"messages": messages, "next_page_token": next_token})
 
 
-@app.get("/emails/experiment-classify-marketing-newsletter-other")
 def emails_experiment_classify_marketing_newsletter_other():
     """Dry-run classification of emails into MARKETING/NEWSLETTER/OTHER using SetFit model."""
     model_server_url = app.config["MODEL_SERVER_URL"]
@@ -155,7 +143,6 @@ def emails_experiment_classify_marketing_newsletter_other():
     return Response(generate(), mimetype="text/plain")
 
 
-@app.get("/emails/declutter")
 def emails_declutter():
     """Preview and delete clutter emails based on specified classes. Supports dry-run mode (no deletions)."""
     model_server_url = app.config["MODEL_SERVER_URL"]
@@ -218,7 +205,6 @@ def emails_declutter():
     return Response(generate(), mimetype="text/plain")
 
 
-@app.get("/emails/stream-preview")
 def emails_stream_preview():
     n = int(request.args.get("n", 25))
     page_token = request.args.get("page_token")
@@ -277,7 +263,6 @@ def emails_stream_preview():
     return jsonify({"messages": messages, "next_page_token": next_token})
 
 
-@app.post("/emails/classify")
 def emails_classify():
     data = request.json or {}
     required = ["id", "subject", "sender_name", "sender_email", "content", "category"]
@@ -291,7 +276,6 @@ def emails_classify():
         return jsonify({"ok": True})
 
 
-@app.post("/emails/move")
 def emails_move():
     data = request.json or {}
     if "id" not in data or "label" not in data:

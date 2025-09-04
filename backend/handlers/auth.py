@@ -3,10 +3,9 @@ from flask import request, jsonify, make_response
 import requests
 from googleapiclient.discovery import build
 
-from app import app, build_flow, upsert_token, get_current_user_creds, Session, engine, Token
+from app import build_flow, upsert_token, get_current_user_creds, Session, engine, Token
 
 
-@app.get("/auth/login")
 def auth_login():
     """Return an authorization URL. CLI prints it, user pastes in browser.
     Optional 'state' is passed through.
@@ -23,7 +22,6 @@ def auth_login():
     return jsonify({"authorization_url": auth_url})
 
 
-@app.get("/auth/callback")
 def auth_callback():
     """Exchange the code for tokens, store them, then show a simple success page."""
     flow = build_flow()
@@ -52,7 +50,6 @@ def auth_callback():
     return resp
 
 
-@app.post("/auth/logout")
 def auth_logout():
     with Session(engine) as s:
         try:

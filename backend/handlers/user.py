@@ -1,10 +1,8 @@
 from flask import jsonify
 from googleapiclient.discovery import build
 
-from app import app, Session, engine, get_current_user_creds
+from app import Session, engine, get_current_user_creds
 
-
-@app.get("/me")
 def me():
     with Session(engine) as s:
         creds, user_email = get_current_user_creds(s)
@@ -14,7 +12,6 @@ def me():
     return jsonify({"email": prof.get("emailAddress"), "messagesTotal": prof.get("messagesTotal")})
 
 
-@app.get("/stats")
 def stats():
     """Return stats: total messages and inbox messages."""
     with Session(engine) as s:
