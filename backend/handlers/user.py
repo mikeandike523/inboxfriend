@@ -1,7 +1,7 @@
 from flask import jsonify
 from googleapiclient.discovery import build
 
-from app import Session, engine, get_current_user_creds
+from preamble import Session, engine, get_current_user_creds
 
 def me():
     with Session(engine) as s:

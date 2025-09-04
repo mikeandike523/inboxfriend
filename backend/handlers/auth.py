@@ -3,7 +3,7 @@ from flask import request, jsonify, make_response
 import requests
 from googleapiclient.discovery import build
 
-from app import build_flow, upsert_token, get_current_user_creds, Session, engine, Token
+from preamble import build_flow, upsert_token, get_current_user_creds, Session, engine, Token
 
 
 def auth_login():

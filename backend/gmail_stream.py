@@ -1,4 +1,3 @@
-from __future__ import annotations
 from typing import List, Dict, Optional
 import base64
 from email.utils import parseaddr

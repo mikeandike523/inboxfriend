@@ -1,12 +1,11 @@
-from flask import request, jsonify, Response
+from flask import request, jsonify
 from sqlalchemy import select
-import requests
-from termcolor import colored
 from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 
-from app import Session, engine, get_current_user_creds, _map_pred, _ID2LABEL, Message, Classification
+from preamble import Session, engine, get_current_user_creds
 from gmail_stream import GmailMessageStream, GmailPreviewMessageStream
+from models import Message, Classification
 
 
 def emails_recent():
@@ -105,104 +104,8 @@ def emails_stream():
     return jsonify({"messages": messages, "next_page_token": next_token})
 
 
-def emails_experiment_classify_marketing_newsletter_other():
-    """Dry-run classification of emails into MARKETING/NEWSLETTER/OTHER using SetFit model."""
-    model_server_url = app.config["MODEL_SERVER_URL"]
-    # Prepare Gmail client stream
-    with Session(engine) as s:
-        creds, user_email = get_current_user_creds(s)
-        gmail = build("gmail", "v1", credentials=creds)
-    n = int(request.args.get("n", 25))
-    stream = GmailPreviewMessageStream(gmail, batch_size=n)
-    stream._next_page_token = request.args.get("page_token")
-
-    def generate():
-        while True:
-            batch, next_token = stream.next_batch()
-            if not batch:
-                break
-            # Prepare inputs for model server
-            texts = [f"{m.get('subject') or ''} {m.get('snippet') or ''}".strip() for m in batch]
-            resp = requests.post(
-                f"{model_server_url}/predict", json={"texts": texts}, timeout=30
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            preds = [_map_pred(p) for p in result.get("predictions", [])]
-            probas = result.get("probabilities") or [None] * len(preds)
-            for m, pred, proba in zip(batch, preds, probas):
-                conf = float(max(proba)) if proba is not None else None
-                label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
-                subject = m.get("subject") or ""
-                snippet = m.get("snippet") or ""
-                if conf is not None:
-                    yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
-                else:
-                    yield f"{label} | {subject}\n    {snippet}\n"
-
-    return Response(generate(), mimetype="text/plain")
-
-
 def emails_declutter():
-    """Preview and delete clutter emails based on specified classes. Supports dry-run mode (no deletions)."""
-    model_server_url = app.config["MODEL_SERVER_URL"]
-    with Session(engine) as s:
-        creds, user_email = get_current_user_creds(s)
-        gmail = build("gmail", "v1", credentials=creds)
-    n = int(request.args.get("n", 25))
-    classes = [c.lower() for c in request.args.getlist("classes")] or ["marketing", "newsletter", "notification"]
-    dry_run = request.args.get("dry_run", "false").lower() == "true"
-    before_this_year = request.args.get("before_this_year", "false").lower() == "true"
-    # Restrict to messages before the start of the current year if requested
-    before = None
-    if before_this_year:
-        now = datetime.now(timezone.utc)
-        start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-        before = start.strftime("%Y/%m/%d")
-    stream = GmailPreviewMessageStream(gmail, batch_size=n, before=before)
-    stream._next_page_token = request.args.get("page_token")
-
-    def generate():
-        while True:
-            batch, next_token = stream.next_batch()
-            if not batch:
-                break
-            # Classify batch via external model service
-            texts = [f"Subject: {m.get('subject') or ''}\nBody:\n{m.get('snippet') or ''}".strip() for m in batch]
-            resp = requests.post(f"{model_server_url}/predict", json={"texts": texts}, timeout=30)
-            resp.raise_for_status()
-            result = resp.json()
-            probas_list = result.get("probabilities") or []
-            classes_set = set(classes)
-            for m, proba in zip(batch, probas_list):
-                subject = m.get("subject") or ""
-                snippet = m.get("snippet") or ""
-                if proba is not None:
-                    # flag deletion if any category probability exceeds threshold and is in target classes
-                    high = [i for i, p in enumerate(proba) if p >= 0.95]
-                    high_labels = { _ID2LABEL.get(i, str(i)).lower() for i in high }
-                    intersect = high_labels & classes_set
-                    if intersect:
-                        # choose highest confidence among matching labels
-                        conf_vals = [proba[i] for i in high if _ID2LABEL.get(i, str(i)).lower() in intersect]
-                        max_conf = max(conf_vals)
-                        label_desc = ", ".join(intersect)
-                        if dry_run:
-                            yield f"Would delete ({label_desc}, {max_conf:.2f}) | {subject}\n    {snippet}\n"
-                        else:
-                            gmail.users().messages().delete(userId="me", id=m["id"]).execute()
-                            yield f"Deleted ({label_desc}, {max_conf:.2f}) | {subject}\n    {snippet}\n"
-                        continue
-                    # no deletion: show top prediction
-                    top_idx = max(range(len(proba)), key=lambda i: proba[i])
-                    pred = _map_pred(top_idx)
-                    conf = proba[top_idx]
-                    label = colored(pred, "green") if pred != "OTHER" else colored(pred, "cyan")
-                    yield f"{label} ({conf:.2f}) | {subject}\n    {snippet}\n"
-                else:
-                    yield f"UNKNOWN | {subject}\n    {snippet}\n"
-
-    return Response(generate(), mimetype="text/plain")
+    return jsonify({"message": "This endpoint is not yet implemented."}), 500
 
 
 def emails_stream_preview():
